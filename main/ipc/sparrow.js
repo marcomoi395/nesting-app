@@ -110,6 +110,53 @@ function readPlacedItemCounts(jsonPath) {
     .sort((a, b) => a[0] - b[0])
     .map(([item_id, count]) => ({ item_id, count }));
 }
+function rewriteTailIdMapping(runDir, safeName, inputPath) {
+  const inputJson = readJsonIfExists(inputPath);
+  const mapping = inputJson?._tailIdMapping;
+  if (!mapping || typeof mapping !== 'object') return;
+
+  const outputDir = path.join(runDir, 'output');
+  const rewrite = (jsonPath) => {
+    const data = readJsonIfExists(jsonPath);
+    if (!data) return;
+    let changed = false;
+    if (Array.isArray(data.items)) {
+      data.items.forEach(item => {
+        const original = mapping[String(item.id)];
+        if (original !== undefined) { item.id = original; changed = true; }
+      });
+    }
+    const placed = data.solution?.layout?.placed_items;
+    if (Array.isArray(placed)) {
+      placed.forEach(p => {
+        const original = mapping[String(p.item_id)];
+        if (original !== undefined) { p.item_id = original; changed = true; }
+      });
+    }
+    if (changed) fs.writeFileSync(jsonPath, JSON.stringify(data, null, 2), 'utf-8');
+  };
+
+  // Continuous final
+  const continuousJson = path.join(outputDir, `final_${safeName}.json`);
+  if (fs.existsSync(continuousJson)) rewrite(continuousJson);
+
+  // Multi-strip final
+  const finalDir = [
+    path.join(outputDir, `final_${safeName}`),
+    ...(!fs.existsSync(path.join(outputDir, `final_${safeName}`))
+      ? (fs.existsSync(outputDir)
+        ? fs.readdirSync(outputDir, { withFileTypes: true })
+            .filter(e => e.isDirectory() && e.name.startsWith('final_'))
+            .map(e => path.join(outputDir, e.name))
+        : [])
+      : []),
+  ].find(d => fs.existsSync(d));
+  if (finalDir && fs.statSync(finalDir).isDirectory()) {
+    fs.readdirSync(finalDir)
+      .filter(name => name.endsWith('.json') && name !== 'summary.json')
+      .forEach(name => rewrite(path.join(finalDir, name)));
+  }
+}
 
 function readLiveManifestIfExists(filePath) {
   if (!fs.existsSync(filePath)) return null;
@@ -638,6 +685,13 @@ function registerSparrowIpc() {
           }
         }
         activeSparrowProcesses.delete(runId);
+        if (code === 0) {
+          try {
+            rewriteTailIdMapping(runDir, safeName, inputPath);
+          } catch (err) {
+            console.warn('[Sparrow] Tail ID rewrite failed:', err);
+          }
+        }
       });
 
       return {

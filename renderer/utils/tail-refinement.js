@@ -53,15 +53,18 @@
   function buildTailSubsetPayload(payload, candidate) {
     const itemCounts = itemCountsToMap(candidate?.itemCounts);
     const baseName = payload?.name || 'nesting-job';
+    const filteredItems = (Array.isArray(payload?.items) ? payload.items : [])
+      .filter(item => itemCounts.has(Number(item?.id)));
+    const idMapping = {};
+    const remappedItems = filteredItems.map((item, index) => {
+      idMapping[index] = Number(item.id);
+      return { ...item, id: index, demand: itemCounts.get(Number(item.id)) };
+    });
     return {
       ...payload,
       name: `${baseName}_tail_${candidate?.id}`,
-      items: (Array.isArray(payload?.items) ? payload.items : [])
-        .filter(item => itemCounts.has(Number(item?.id)))
-        .map(item => ({
-          ...item,
-          demand: itemCounts.get(Number(item?.id)),
-        })),
+      items: remappedItems,
+      _tailIdMapping: idMapping,
     };
   }
 

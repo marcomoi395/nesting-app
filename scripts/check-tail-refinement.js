@@ -102,10 +102,15 @@ assert.equal(subsetPayload.name, 'sample-job_tail_last-only');
 assert.deepEqual(
   plain(subsetPayload.items),
   [
-    { id: 2, demand: 2, meta: 'b' },
-    { id: 4, demand: 2, meta: 'd' },
+    { id: 0, demand: 2, meta: 'b' },
+    { id: 1, demand: 2, meta: 'd' },
   ],
-  'subset payload should preserve ids and rewrite demand to last strip counts'
+  'subset payload should remap ids to 0-based and rewrite demand to last strip counts'
+);
+assert.deepEqual(
+  plain(subsetPayload._tailIdMapping),
+  { '0': 2, '1': 4 },
+  'subset payload should include reverse id mapping'
 );
 
 const merged = mergeTailReplacement(summary, {

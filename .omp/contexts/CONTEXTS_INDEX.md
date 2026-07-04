@@ -7,6 +7,7 @@ Use this index to decide which `.omp/contexts/` files to read before starting wo
 | File | Topic | Use When | Last Updated |
 |---|---|---|---|
 | [`multi-seed-quality-runs.md`](multi-seed-quality-runs.md) | Multi-seed Sparrow quality-run selection and tail refinement | Working on nesting quality-run behavior, final-sheet tail refinement, scoring, seed selection, or final result/export wiring | 2026-07-04 |
+| [`nesting-export-layout.md`](nesting-export-layout.md) | Nesting Export Mode File Structures | Developing or debugging Sparrow integration layers, modes, or export file path resolutions in IPC | 2026-07-04 |
 
 ## Maintenance Rules
 

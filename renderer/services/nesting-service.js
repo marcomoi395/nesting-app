@@ -88,8 +88,8 @@
     function tailRefinementOptions(baseOptions, settings) {
       return {
         ...baseOptions,
-        globalTime: Math.min(300, Math.max(120, Number(settings.timeLimit) || 60)),
-        align: 'top-left',
+        maxStripLength: null,
+        globalTime: Math.max(1, Number(settings.timeLimit) || 60),
         earlyTermination: !!settings.earlyStopping,
       };
     }
