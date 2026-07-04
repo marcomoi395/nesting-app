@@ -6,7 +6,7 @@ Use this index to decide which `.omp/contexts/` files to read before starting wo
 
 | File | Topic | Use When | Last Updated |
 |---|---|---|---|
-| [`multi-seed-quality-runs.md`](multi-seed-quality-runs.md) | Multi-seed Sparrow quality-run selection | Working on nesting quality-run behavior, scoring, seed selection, or final result/export wiring | 2026-07-04 |
+| [`multi-seed-quality-runs.md`](multi-seed-quality-runs.md) | Multi-seed Sparrow quality-run selection and tail refinement | Working on nesting quality-run behavior, final-sheet tail refinement, scoring, seed selection, or final result/export wiring | 2026-07-04 |
 
 ## Maintenance Rules
 

@@ -90,6 +90,26 @@ function readJsonIfExists(filePath) {
   if (!fs.existsSync(filePath)) return null;
   return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
 }
+function readPlacedItemCounts(jsonPath) {
+  let stripData = null;
+  try {
+    stripData = readJsonIfExists(jsonPath);
+  } catch {
+    return [];
+  }
+  const placedItems = Array.isArray(stripData?.solution?.layout?.placed_items)
+    ? stripData.solution.layout.placed_items
+    : [];
+  const counts = new Map();
+  placedItems.forEach(placement => {
+    const itemId = Number(placement?.item_id);
+    if (!Number.isFinite(itemId)) return;
+    counts.set(itemId, (counts.get(itemId) || 0) + 1);
+  });
+  return [...counts.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([item_id, count]) => ({ item_id, count }));
+}
 
 function readLiveManifestIfExists(filePath) {
   if (!fs.existsSync(filePath)) return null;
@@ -174,6 +194,7 @@ function collectContinuousFinalArtifacts(outputDir, safeName) {
     ? solution.placed_items.length
     : countPlacedItemsInSvg(svgText);
 
+  const placedItemCounts = readPlacedItemCounts(finalJsonPath);
   const summary = compactLastStripArtifacts({
     name: finalJson?.name || safeName,
     strip_count: 1,
@@ -187,6 +208,8 @@ function collectContinuousFinalArtifacts(outputDir, safeName) {
       strip_width: Number.isFinite(stripWidth) ? stripWidth : null,
       density: Number.isFinite(density) ? density : null,
       item_count: Number.isFinite(itemCount) ? itemCount : 0,
+      placed_item_counts: placedItemCounts,
+      placed_item_ids: placedItemCounts.map(item => item.item_id),
       is_preview: false,
     }],
   });
@@ -317,11 +340,14 @@ function collectSparrowArtifacts(runDir, safeName) {
       strips: summary.strips.map(strip => {
         const svgPath = path.resolve(runDir, strip.svg_path);
         const jsonPath = path.resolve(runDir, strip.json_path);
+        const placedItemCounts = readPlacedItemCounts(jsonPath);
         return {
           ...strip,
           svg_path: svgPath,
           json_path: jsonPath,
           svg: fs.existsSync(svgPath) ? fs.readFileSync(svgPath, 'utf-8') : '',
+          placed_item_counts: placedItemCounts,
+          placed_item_ids: placedItemCounts.map(item => item.item_id),
           is_preview: false,
         };
       }),
@@ -402,6 +428,34 @@ function collectRunningSparrowArtifacts(runDir, safeName) {
     summary: null,
   };
 }
+async function delay(ms) {
+  await new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function hasExportableFinalSummary(summary) {
+  const strips = Array.isArray(summary?.strips) ? summary.strips : [];
+  return !!(
+    strips.length
+    && !summary?.is_preview
+    && strips.every(strip => typeof strip?.json_path === 'string' && strip.json_path.trim() && fs.existsSync(strip.json_path))
+  );
+}
+
+async function awaitCompletedArtifacts(runDir, safeName, {
+  attempts = 15,
+  delayMs = 100,
+} = {}) {
+  let artifacts = collectSparrowArtifacts(runDir, safeName);
+  if (hasExportableFinalSummary(artifacts?.summary)) return artifacts;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await delay(delayMs);
+    artifacts = collectSparrowArtifacts(runDir, safeName);
+    if (hasExportableFinalSummary(artifacts?.summary)) return artifacts;
+  }
+
+  return artifacts;
+}
 
 function terminateSparrowRun(runId, { markStopped = true, forceAfterMs = 2000 } = {}) {
   const child = activeSparrowProcesses.get(runId);
@@ -480,6 +534,8 @@ function registerSparrowIpc() {
       const safeName = String(payload?.name || 'nesting-job')
         .replace(/[^a-z0-9-_]+/gi, '-')
         .replace(/^-+|-+$/g, '') || 'nesting-job';
+
+      payload.name = safeName;
       const runsRootDir = path.join(app.getPath('temp'), 'nestkit-runs');
       cleanupTempArtifacts(runsRootDir);
       const runDir = path.join(runsRootDir, `${safeName}-${Date.now()}`);
@@ -617,7 +673,7 @@ function registerSparrowIpc() {
     const status = run.status;
     const artifacts = status === 'running'
       ? collectRunningSparrowArtifacts(run.runDir, run.safeName)
-      : collectSparrowArtifacts(run.runDir, run.safeName);
+      : await awaitCompletedArtifacts(run.runDir, run.safeName);
     const error = status === 'error'
       ? (run.stderr.trim() || run.stdout.trim() || run.error || 'Sparrow failed')
       : null;
@@ -640,4 +696,6 @@ function registerSparrowIpc() {
 
 module.exports = {
   registerSparrowIpc,
+  hasExportableFinalSummary,
+  awaitCompletedArtifacts,
 };

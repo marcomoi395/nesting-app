@@ -21,6 +21,13 @@
         },
       } = globalScope.NestSettings || {};
       const { scoreNestSummary, isNestSummaryBetter } = globalScope.NestResultScoring || {};
+      const {
+        buildTailRefinementCandidates,
+        buildTailSubsetPayload,
+        mergeTailReplacement,
+        scoreTailRefinementSummary,
+        isTailRefinementBetter,
+      } = globalScope.NestTailRefinement || {};
       let nestInterval = null;
       let sparrowRunAborted = false;
       let activeSparrowRunId = null;
@@ -69,6 +76,22 @@
     function qualityRunSeeds(settings, count) {
       const base = Number.isFinite(Number(settings.rngSeed)) ? Math.trunc(Number(settings.rngSeed)) : 42;
       return [base, base + 101, base + 1009, base + 10007, base + 100003].slice(0, count);
+    }
+    function tailRefinementEnabled(settings) {
+      return qualityRunCount(settings) > 1;
+    }
+
+    function tailRefinementSeeds(settings) {
+      return qualityRunSeeds(settings, Math.max(3, qualityRunCount(settings)));
+    }
+
+    function tailRefinementOptions(baseOptions, settings) {
+      return {
+        ...baseOptions,
+        globalTime: Math.min(300, Math.max(120, Number(settings.timeLimit) || 60)),
+        align: 'top-left',
+        earlyTermination: !!settings.earlyStopping,
+      };
     }
 
     function setRunControlsRunning() {
@@ -151,6 +174,73 @@
 
       if (!best) throw firstError || new Error('No successful quality run');
       return best;
+    }
+    async function runTailRefinement(baseSummary, payload, baseOptions, settings) {
+      if (
+        typeof buildTailRefinementCandidates !== 'function'
+        || typeof buildTailSubsetPayload !== 'function'
+        || typeof mergeTailReplacement !== 'function'
+        || typeof scoreTailRefinementSummary !== 'function'
+        || typeof isTailRefinementBetter !== 'function'
+      ) {
+        console.warn('[Sparrow] Tail refinement unavailable');
+        return baseSummary;
+      }
+      if (!tailRefinementEnabled(settings)) return baseSummary;
+
+      const candidates = buildTailRefinementCandidates(baseSummary, payload);
+      if (!candidates.length) return baseSummary;
+
+      const sheet = state.sheets[0] || {};
+      const seeds = tailRefinementSeeds(settings);
+      const options = tailRefinementOptions(baseOptions, settings);
+      let bestSummary = baseSummary;
+      let bestScore = scoreTailRefinementSummary(baseSummary, sheet);
+      let attempted = 0;
+
+      for (const candidate of candidates) {
+        for (const seed of seeds) {
+          if (sparrowRunAborted) return null;
+          setRunControlsRunning();
+          attempted += 1;
+          dom.nestStats.textContent = 'Tail optimize ' + attempted + '/' + (candidates.length * seeds.length) + ' · ' + candidate.label + ' · seed ' + seed;
+          dom.nestStats.title = '';
+          const tailPayload = buildTailSubsetPayload(payload, candidate);
+          try {
+            const result = await window.electronAPI.runSparrow(tailPayload, { ...options, rngSeed: seed });
+            if (!result?.success || !result.runId) {
+              console.warn('[Sparrow] Tail refinement candidate failed:', candidate.id, seed, result?.error || 'Failed to start Sparrow');
+              activeSparrowRunId = null;
+              try {
+                await window.electronAPI.stopSparrow?.();
+              } catch (stopError) {
+                console.warn('[Sparrow] Cleanup stop after tail refinement launch failure failed:', stopError);
+              }
+              continue;
+            }
+            activeSparrowRunId = result.runId;
+            const completed = await waitForSparrowCompletion(result.runId);
+            if (completed.status === 'stopped') return null;
+            const merged = mergeTailReplacement(baseSummary, completed.summary, candidate);
+            if (merged === null) continue;
+            const score = scoreTailRefinementSummary(merged, sheet);
+            if (isTailRefinementBetter(score, bestScore)) {
+              bestSummary = merged;
+              bestScore = score;
+            }
+          } catch (err) {
+            console.warn('[Sparrow] Tail refinement candidate failed:', candidate.id, seed, err?.sparrowDetails || err);
+            activeSparrowRunId = null;
+            try {
+              await window.electronAPI.stopSparrow?.();
+            } catch (stopError) {
+              console.warn('[Sparrow] Cleanup stop after tail refinement failure failed:', stopError);
+            }
+          }
+        }
+      }
+
+      return bestSummary;
     }
 
     // Called on a 500ms interval while the solver is running to fetch the latest result.
@@ -301,6 +391,9 @@
           if (runCount > 1) {
             const best = await runQualitySeedSequence(exported.payload, sparrowOptions, settings);
             if (best === null) return;
+            const refinedSummary = await runTailRefinement(best.summary, exported.payload, sparrowOptions, settings);
+            if (refinedSummary === null) return;
+            best.summary = refinedSummary;
             state.nestResult = best.summary;
             state.nestInputPath = best.inputPath;
             state.activeStripIndex = Math.min(state.activeStripIndex || 0, Math.max(0, (best.summary.strips?.length || 1) - 1));

@@ -4,42 +4,40 @@
 
 - `Quality runs` is visible in Algorithm settings and defaults to `1`, so normal behavior stays single-run until user opts in.
 - Multi-seed mode runs Sparrow sequentially with deterministic seeds derived from `rngSeed`: `[base, base + 101, base + 1009, base + 10007, base + 100003]`, capped to 5 runs.
-- Best result selection is lexicographic: fewer strips first, then better tail-sheet utilization, then average utilization, then total item count.
-- Tail quality scoring uses fixed-width density correction matching display/export behavior, so chosen result aligns with visible utilization.
-- Best run is applied by setting `state.nestResult` and `state.nestInputPath`; export and canvas code stay unchanged.
+- After best full-run seed is chosen, `Quality runs > 1` also triggers bounded tail local search on exact placed items from final sheet only: `last-only`.
+- Tail replacement can keep or reduce strip count on that final-sheet rerun, never increase it; better candidate selection prefers fewer strips, then denser last sheet, then stronger tail densities, then smaller last-strip width, then total item count.
+- Tail subset runs preserve original item ids, so export and canvas code stay unchanged when refined strips replace tail sheets.
 
 ## Details
 
-- Scoring lives in `renderer/utils/nest-result-scoring.js` and exports global `NestResultScoring` with `effectiveStripDensity`, `scoreNestSummary`, and `isNestSummaryBetter`.
-- Empty or missing strip summaries score as `{ stripCount: Infinity, minTailDensity: 0, avgTailDensity: 0, avgDensity: 0, totalItemCount: 0 }`.
-- Tail means last 3 strips by default. Tie-break order is:
-  1. smaller `stripCount`
-  2. higher `minTailDensity`
-  3. higher `avgTailDensity`
-  4. higher `avgDensity`
-  5. higher `totalItemCount`
-- Renderer orchestrates quality runs in `renderer/services/nesting-service.js` without new IPC. Existing `runSparrow`, `pollSparrow`, `stopSparrow` stay canonical.
-- Stop button still aborts whole sequence through existing `stopSparrow()` behavior.
-- One failed seed does not fail sequence if another seed succeeds. If all seeds fail, first error is surfaced.
-- During quality runs, status text is restored to `Quality run X/Y · seed Z` between polls so sequence progress stays visible.
+- Completed strip summaries now carry `placed_item_counts` and `placed_item_ids` from final strip JSON in `main/ipc/sparrow.js`; live preview strips still omit them.
+- Tail helper lives in `renderer/utils/tail-refinement.js` and exports `NestTailRefinement` with candidate generation, payload slicing, merge, scoring, and comparison helpers.
+- Candidate search is now bounded to final sheet only (`last-only`) and `Math.max(3, qualityRunCount(settings))` seeds, still capped by existing `qualityRunSeeds` length of 5.
+- Tail runs reuse existing renderer orchestration in `renderer/services/nesting-service.js` with canonical `runSparrow`, `pollSparrow`, `stopSparrow`, and `waitForSparrowCompletion` flow.
+- Tail run options intentionally force `align: 'top-left'` and longer `globalTime` floor (`120`–`300`) while keeping existing early-stop setting.
+- Tail refinement failure is non-fatal once full solve succeeded: failed candidates log warnings, and final result falls back to best full-run summary.
+- Stop button still aborts whole sequence through existing `stopSparrow()` behavior, including tail attempts.
+- `main/utils/compact-last-strip.js` still compacts every completed Sparrow run, including tail subset runs, before renderer receives replacement strips.
 
 ## Evidence
 
-- `user-stated`: approved plan required default single-run behavior, visible `Quality runs`, deterministic seed list, tail-priority scoring, and no IPC changes.
-- `code-verified`: `renderer/index.html` adds `Quality runs` input and loads `utils/nest-result-scoring.js` before renderer services.
-- `code-verified`: `shared/settings.js` adds `multiSeedQualityRuns: 1` and clamps it to `[1, 5]`.
-- `code-verified`: `renderer/services/nesting-service.js` adds `runQualitySeedSequence`, `qualityRunSeeds`, `qualityRunCount`, and best-result finalization through `state.nestResult` / `state.nestInputPath`.
-- `code-verified`: `renderer/services/export-service.js` and `renderer/views/canvas-view.js` were intentionally left unchanged; compatibility depends on writing chosen best result back into shared state.
+- `user-stated`: approved plan first required bounded `last-only` / `last-2` / `last-3` tail refinement, then narrowed behavior to `last-only` only, with no new setting and no IPC/export-retention changes.
+- `code-verified`: `main/ipc/sparrow.js` adds `readPlacedItemCounts()` and attaches `placed_item_counts` / `placed_item_ids` to completed strip summaries using final `json_path`.
+- `code-verified`: `renderer/index.html` loads `utils/tail-refinement.js` after `utils/nest-result-scoring.js` and before `services/nesting-service.js`.
+- `code-verified`: `renderer/utils/tail-refinement.js` adds pure helpers for tail candidate generation, subset payloads, merged summaries, and tail-score ordering.
+- `code-verified`: `renderer/services/nesting-service.js` adds `runTailRefinement()` after best full-run seed selection and leaves single-run path unchanged when `Quality runs = 1`.
+- `code-verified`: `renderer/services/export-service.js`, `main/utils/temp-retention.js`, `main/utils/compact-last-strip.js`, and `main/ipc/export-dxf.js` were intentionally left unchanged; compatibility depends on preserved original item ids and reused artifact paths.
+- `test-verified`: `node scripts/check-tail-refinement.js` printed `ok`.
 - `test-verified`: `node scripts/check-nest-result-scoring.js` printed `ok`.
-- `test-verified`: `node scripts/check-solver-polygon-export.js` printed `ok` after change.
-- `test-verified`: `node --check renderer/utils/nest-result-scoring.js`, `node --check renderer/services/nesting-service.js`, `node --check shared/settings.js`, and `node --check scripts/check-nest-result-scoring.js` all passed.
+- `test-verified`: `node scripts/check-compact-last-strip.js` printed `ok`.
+- `test-verified`: `node scripts/check-solver-polygon-export.js` printed `ok`.
 
 ## Use When
 
-- Changing Sparrow seed selection, run orchestration, or stop behavior.
-- Adjusting how multi-sheet/tail quality is scored.
-- Investigating why export or preview should show chosen best run after multi-seed execution.
-- Adding tests around nesting result ranking or fixed-width density handling.
+- Changing Sparrow seed selection, quality-run orchestration, or stop behavior.
+- Adjusting how multi-sheet/tail quality is scored or how final-sheet tail refinement is generated.
+- Investigating why export or preview should show chosen best run after multi-seed execution or final-sheet tail refinement.
+- Adding tests around final-sheet replacement merging, fixed-width density handling, or tail payload slicing.
 
 ## Do Not Use When
 
