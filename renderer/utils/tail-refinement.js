@@ -93,8 +93,6 @@
       return {
         stripCount: Infinity,
         lastDensity: 0,
-        minTailDensity: 0,
-        avgTailDensity: 0,
         lastStripWidth: Infinity,
         totalItemCount: 0,
       };
@@ -104,22 +102,14 @@
     const densityOf = typeof scoreApi.effectiveStripDensity === 'function'
       ? strip => scoreApi.effectiveStripDensity(strip, sheet)
       : () => 0;
-    const densities = strips.map(densityOf);
-    const tailDensities = densities.slice(-Math.min(3, densities.length));
     const lastStrip = strips[strips.length - 1] || {};
-    const lastDensity = densities[densities.length - 1] || 0;
-    const minTailDensity = tailDensities.length ? Math.min(...tailDensities) : 0;
-    const avgTailDensity = tailDensities.length
-      ? tailDensities.reduce((sum, density) => sum + density, 0) / tailDensities.length
-      : 0;
+    const lastDensity = densityOf(lastStrip);
     const lastStripWidth = Number(lastStrip.strip_width) || Infinity;
     const totalItemCount = strips.reduce((sum, strip) => sum + (Number(strip?.item_count) || 0), 0);
 
     return {
       stripCount: strips.length,
       lastDensity,
-      minTailDensity,
-      avgTailDensity,
       lastStripWidth,
       totalItemCount,
     };
@@ -133,10 +123,6 @@
     }
     if (((candidateScore?.lastDensity ?? 0) - (currentScore?.lastDensity ?? 0)) > tolerance) return true;
     if (((currentScore?.lastDensity ?? 0) - (candidateScore?.lastDensity ?? 0)) > tolerance) return false;
-    if (((candidateScore?.minTailDensity ?? 0) - (currentScore?.minTailDensity ?? 0)) > tolerance) return true;
-    if (((currentScore?.minTailDensity ?? 0) - (candidateScore?.minTailDensity ?? 0)) > tolerance) return false;
-    if (((candidateScore?.avgTailDensity ?? 0) - (currentScore?.avgTailDensity ?? 0)) > tolerance) return true;
-    if (((currentScore?.avgTailDensity ?? 0) - (candidateScore?.avgTailDensity ?? 0)) > tolerance) return false;
     if (((currentScore?.lastStripWidth ?? Infinity) + tolerance) < (candidateScore?.lastStripWidth ?? Infinity)) return false;
     if (((candidateScore?.lastStripWidth ?? Infinity) + tolerance) < (currentScore?.lastStripWidth ?? Infinity)) return true;
     return (candidateScore?.totalItemCount ?? 0) > (currentScore?.totalItemCount ?? 0);

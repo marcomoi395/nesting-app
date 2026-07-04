@@ -21,33 +21,32 @@
     return usedArea / fixedArea;
   }
 
-  function scoreNestSummary(summary, sheet = {}, tailCount = 3) {
+  function scoreNestSummary(summary, sheet = {}) {
     const strips = Array.isArray(summary?.strips) ? summary.strips : [];
     if (!strips.length) {
       return {
         stripCount: Infinity,
-        minTailDensity: 0,
-        avgTailDensity: 0,
-        avgDensity: 0,
+        minBodyDensity: 0,
+        avgBodyDensity: 0,
+        avgDensityExcludingLast: 0,
         totalItemCount: 0,
       };
     }
 
     const densities = strips.map(strip => effectiveStripDensity(strip, sheet));
-    const tailSize = Math.min(Math.max(0, Math.trunc(Number(tailCount) || 0)), strips.length);
-    const tailDensities = tailSize > 0 ? densities.slice(-tailSize) : [];
-    const avgDensity = densities.reduce((sum, density) => sum + density, 0) / densities.length;
-    const avgTailDensity = tailDensities.length
-      ? tailDensities.reduce((sum, density) => sum + density, 0) / tailDensities.length
+    const bodyDensities = strips.length > 1 ? densities.slice(0, -1) : [];
+    const avgDensityExcludingLast = bodyDensities.length
+      ? bodyDensities.reduce((sum, density) => sum + density, 0) / bodyDensities.length
       : 0;
-    const minTailDensity = tailDensities.length ? Math.min(...tailDensities) : 0;
+    const avgBodyDensity = avgDensityExcludingLast;
+    const minBodyDensity = bodyDensities.length ? Math.min(...bodyDensities) : 0;
     const totalItemCount = strips.reduce((sum, strip) => sum + (Number(strip?.item_count) || 0), 0);
 
     return {
       stripCount: strips.length,
-      minTailDensity,
-      avgTailDensity,
-      avgDensity,
+      minBodyDensity,
+      avgBodyDensity,
+      avgDensityExcludingLast,
       totalItemCount,
     };
   }
@@ -58,12 +57,12 @@
     if ((candidateScore?.stripCount ?? Infinity) !== (currentScore?.stripCount ?? Infinity)) {
       return (candidateScore?.stripCount ?? Infinity) < (currentScore?.stripCount ?? Infinity);
     }
-    if (((candidateScore?.minTailDensity ?? 0) - (currentScore?.minTailDensity ?? 0)) > tolerance) return true;
-    if (((currentScore?.minTailDensity ?? 0) - (candidateScore?.minTailDensity ?? 0)) > tolerance) return false;
-    if (((candidateScore?.avgTailDensity ?? 0) - (currentScore?.avgTailDensity ?? 0)) > tolerance) return true;
-    if (((currentScore?.avgTailDensity ?? 0) - (candidateScore?.avgTailDensity ?? 0)) > tolerance) return false;
-    if (((candidateScore?.avgDensity ?? 0) - (currentScore?.avgDensity ?? 0)) > tolerance) return true;
-    if (((currentScore?.avgDensity ?? 0) - (candidateScore?.avgDensity ?? 0)) > tolerance) return false;
+    if (((candidateScore?.minBodyDensity ?? 0) - (currentScore?.minBodyDensity ?? 0)) > tolerance) return true;
+    if (((currentScore?.minBodyDensity ?? 0) - (candidateScore?.minBodyDensity ?? 0)) > tolerance) return false;
+    if (((candidateScore?.avgBodyDensity ?? 0) - (currentScore?.avgBodyDensity ?? 0)) > tolerance) return true;
+    if (((currentScore?.avgBodyDensity ?? 0) - (candidateScore?.avgBodyDensity ?? 0)) > tolerance) return false;
+    if (((candidateScore?.avgDensityExcludingLast ?? 0) - (currentScore?.avgDensityExcludingLast ?? 0)) > tolerance) return true;
+    if (((currentScore?.avgDensityExcludingLast ?? 0) - (candidateScore?.avgDensityExcludingLast ?? 0)) > tolerance) return false;
     return (candidateScore?.totalItemCount ?? 0) > (currentScore?.totalItemCount ?? 0);
   }
 

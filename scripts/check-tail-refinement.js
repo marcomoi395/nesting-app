@@ -164,5 +164,22 @@ assert.equal(
   true,
   'fewer strips should win even with lower lastDensity'
 );
+const sameDensityNarrowerLast = scoreTailRefinementSummary({
+  strips: [
+    { density: 0.6, strip_width: 1000, strip_height: 1000, item_count: 3 },
+    { density: 0.7, strip_width: 900, strip_height: 1000, item_count: 3 },
+  ],
+}, { widthMode: 'unlimited' });
+const sameDensityWiderLast = scoreTailRefinementSummary({
+  strips: [
+    { density: 0.6, strip_width: 1000, strip_height: 1000, item_count: 3 },
+    { density: 0.7, strip_width: 1000, strip_height: 1000, item_count: 3 },
+  ],
+}, { widthMode: 'unlimited' });
+assert.equal(
+  isTailRefinementBetter(sameDensityNarrowerLast, sameDensityWiderLast),
+  true,
+  'when last density ties, narrower last strip should win'
+);
 
 console.log('ok');

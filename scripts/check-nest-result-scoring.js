@@ -40,26 +40,23 @@ const nineStrip = summaryFromTailDensities([0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.95, 
 assert.equal(
   isNestSummaryBetter(scoreNestSummary(eightStrip), scoreNestSummary(nineStrip)),
   true,
-  'fewer strips should beat better tail utilization'
+  'fewer strips should still win first'
 );
 
-const weakerMinTail = summaryFromTailDensities([0.6, 0.6, 0.6, 0.5, 0.5, 0.5]);
-const strongerMinTail = summaryFromTailDensities([0.6, 0.6, 0.6, 0.5, 0.5, 0.7]);
+const weakerBodySameLast = summaryFromTailDensities([0.6, 0.6, 0.6, 0.5, 0.5, 0.5]);
+const strongerBodySameLast = summaryFromTailDensities([0.6, 0.6, 0.6, 0.5, 0.7, 0.5]);
 assert.equal(
-  isNestSummaryBetter(scoreNestSummary(strongerMinTail), scoreNestSummary(weakerMinTail)),
+  isNestSummaryBetter(scoreNestSummary(strongerBodySameLast), scoreNestSummary(weakerBodySameLast)),
   true,
-  'higher min tail density should win when strip count matches'
+  'higher body density should win when strip count matches'
 );
 
-const lowerAvgTail = summaryFromTailDensities([0.4, 0.4, 0.4, 0.5, 0.5, 0.9]);
-const higherAvgTail = summaryFromTailDensities([0.4, 0.4, 0.4, 0.5, 0.6, 0.9]);
-const lowerAvgScore = scoreNestSummary(lowerAvgTail);
-const higherAvgScore = scoreNestSummary(higherAvgTail);
-assert.equal(lowerAvgScore.minTailDensity, higherAvgScore.minTailDensity, 'test setup should tie min tail density');
+const sameBodyWeakerLast = summaryFromTailDensities([0.4, 0.4, 0.4, 0.5, 0.5, 0.6]);
+const sameBodyStrongerLast = summaryFromTailDensities([0.4, 0.4, 0.4, 0.5, 0.5, 0.95]);
 assert.equal(
-  isNestSummaryBetter(higherAvgScore, lowerAvgScore),
-  true,
-  'higher avg tail density should win after min tail tie'
+  isNestSummaryBetter(scoreNestSummary(sameBodyStrongerLast), scoreNestSummary(sameBodyWeakerLast)),
+  false,
+  'phase 1 scoring should ignore last sheet quality when earlier sheets tie'
 );
 
 assert.equal(
