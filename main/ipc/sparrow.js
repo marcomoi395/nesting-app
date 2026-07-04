@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const { cleanupTempArtifacts } = require('../utils/temp-retention');
+const { compactLastStripArtifacts } = require('../utils/compact-last-strip');
 
 const activeSparrowProcesses = new Map();
 const sparrowRuns = new Map();
@@ -173,24 +174,26 @@ function collectContinuousFinalArtifacts(outputDir, safeName) {
     ? solution.placed_items.length
     : countPlacedItemsInSvg(svgText);
 
+  const summary = compactLastStripArtifacts({
+    name: finalJson?.name || safeName,
+    strip_count: 1,
+    density: Number.isFinite(density) ? density : null,
+    is_preview: false,
+    strips: [{
+      index: 1,
+      svg_path: finalSvgPath,
+      json_path: finalJsonPath,
+      svg: svgText,
+      strip_width: Number.isFinite(stripWidth) ? stripWidth : null,
+      density: Number.isFinite(density) ? density : null,
+      item_count: Number.isFinite(itemCount) ? itemCount : 0,
+      is_preview: false,
+    }],
+  });
+
   return {
     summaryPath: finalJsonPath,
-    summary: {
-      name: finalJson?.name || safeName,
-      strip_count: 1,
-      density: Number.isFinite(density) ? density : null,
-      is_preview: false,
-      strips: [{
-        index: 1,
-        svg_path: finalSvgPath,
-        json_path: finalJsonPath,
-        svg: svgText,
-        strip_width: Number.isFinite(stripWidth) ? stripWidth : null,
-        density: Number.isFinite(density) ? density : null,
-        item_count: Number.isFinite(itemCount) ? itemCount : 0,
-        is_preview: false,
-      }],
-    },
+    summary,
   };
 }
 
@@ -309,22 +312,23 @@ function collectSparrowArtifacts(runDir, safeName) {
   const summary = readJsonIfExists(summaryPath);
 
   if (summary?.strips?.length) {
+    const mappedSummary = compactLastStripArtifacts({
+      ...summary,
+      strips: summary.strips.map(strip => {
+        const svgPath = path.resolve(runDir, strip.svg_path);
+        const jsonPath = path.resolve(runDir, strip.json_path);
+        return {
+          ...strip,
+          svg_path: svgPath,
+          json_path: jsonPath,
+          svg: fs.existsSync(svgPath) ? fs.readFileSync(svgPath, 'utf-8') : '',
+          is_preview: false,
+        };
+      }),
+    });
     return {
       summaryPath,
-      summary: {
-        ...summary,
-        strips: summary.strips.map(strip => {
-          const svgPath = path.resolve(runDir, strip.svg_path);
-          const jsonPath = path.resolve(runDir, strip.json_path);
-          return {
-            ...strip,
-            svg_path: svgPath,
-            json_path: jsonPath,
-            svg: fs.existsSync(svgPath) ? fs.readFileSync(svgPath, 'utf-8') : '',
-            is_preview: false,
-          };
-        }),
-      },
+      summary: mappedSummary,
     };
   }
 
@@ -491,9 +495,10 @@ function registerSparrowIpc() {
       if (Number.isFinite(options.rngSeed)) {
         args.push('--rng-seed', String(options.rngSeed));
       }
-      if (Number.isFinite(options.workers) && options.workers >= 1) {
-        args.push('--workers', String(Math.trunc(options.workers)));
-      }
+      // ponytail: Sparrow binary in this environment does not support --workers; restore when CLI adds it.
+      // if (Number.isFinite(options.workers) && options.workers >= 1) {
+      //   args.push('--workers', String(Math.trunc(options.workers)));
+      // }
       if (options.earlyTermination) {
         args.push('--early-termination');
       }
