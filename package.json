@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "@flatten-js/core": "^1.6.12",
+    "@tarikjabiri/dxf": "^2.8.9",
     "concaveman": "^2.0.0",
     "dxf-parser": "^1.1.2",
     "jsts": "^2.12.1",
