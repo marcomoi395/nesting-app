@@ -24,6 +24,7 @@ vm.createContext(context);
 });
 
 const {
+  shouldSkipTailRefinement,
   buildTailRefinementCandidates,
   buildTailSubsetPayload,
   mergeTailReplacement,
@@ -81,6 +82,21 @@ const summary = {
     },
   ],
 };
+assert.equal(
+  shouldSkipTailRefinement(summary, { widthMode: 'unlimited' }),
+  true,
+  'unlimited mode should always skip tail refinement'
+);
+assert.equal(
+  shouldSkipTailRefinement({ strips: [{}] }, { widthMode: 'fixed' }),
+  true,
+  'single-strip fixed result should skip tail refinement'
+);
+assert.equal(
+  shouldSkipTailRefinement(summary, { widthMode: 'max' }),
+  false,
+  'multi-strip max result should still allow tail refinement'
+);
 
 const candidates = buildTailRefinementCandidates(summary, payload);
 assert.deepEqual(
@@ -136,22 +152,22 @@ assert.equal(
 );
 
 const sheet = { widthMode: 'fixed', width: 1000, height: 1000 };
-const weakerLast = scoreTailRefinementSummary({
+const shorterLowerDensityLast = scoreTailRefinementSummary({
   strips: [
     { density: 0.6, strip_width: 1000, strip_height: 1000, item_count: 3 },
-    { density: 0.5, strip_width: 1000, strip_height: 1000, item_count: 3 },
+    { density: 0.5, strip_width: 800, strip_height: 1000, item_count: 3 },
   ],
 }, sheet);
-const strongerLast = scoreTailRefinementSummary({
+const longerHigherDensityLast = scoreTailRefinementSummary({
   strips: [
     { density: 0.6, strip_width: 1000, strip_height: 1000, item_count: 3 },
     { density: 0.7, strip_width: 1000, strip_height: 1000, item_count: 3 },
   ],
 }, sheet);
 assert.equal(
-  isTailRefinementBetter(strongerLast, weakerLast),
+  isTailRefinementBetter(shorterLowerDensityLast, longerHigherDensityLast),
   true,
-  'higher lastDensity should win when strip count ties'
+  'fixed-mode tail scoring should prefer shorter last sheet before density'
 );
 
 const fewerStripsWorseTail = scoreTailRefinementSummary({
@@ -160,10 +176,28 @@ const fewerStripsWorseTail = scoreTailRefinementSummary({
   ],
 }, sheet);
 assert.equal(
-  isTailRefinementBetter(fewerStripsWorseTail, strongerLast),
+  isTailRefinementBetter(fewerStripsWorseTail, longerHigherDensityLast),
   true,
-  'fewer strips should win even with lower lastDensity'
+  'fewer strips should still win even with lower tail quality'
 );
+const maxModeShorterLast = scoreTailRefinementSummary({
+  strips: [
+    { density: 0.6, strip_width: 1000, strip_height: 1000, item_count: 3 },
+    { density: 0.5, strip_width: 780, strip_height: 1000, item_count: 3 },
+  ],
+}, { widthMode: 'max', width: 1000, height: 1000 });
+const maxModeLongerLast = scoreTailRefinementSummary({
+  strips: [
+    { density: 0.6, strip_width: 1000, strip_height: 1000, item_count: 3 },
+    { density: 0.7, strip_width: 950, strip_height: 1000, item_count: 3 },
+  ],
+}, { widthMode: 'max', width: 1000, height: 1000 });
+assert.equal(
+  isTailRefinementBetter(maxModeShorterLast, maxModeLongerLast),
+  true,
+  'max-mode tail scoring should prefer shorter last sheet before density'
+);
+
 const sameDensityNarrowerLast = scoreTailRefinementSummary({
   strips: [
     { density: 0.6, strip_width: 1000, strip_height: 1000, item_count: 3 },

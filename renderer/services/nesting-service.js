@@ -22,6 +22,7 @@
       } = globalScope.NestSettings || {};
       const { scoreNestSummary, isNestSummaryBetter } = globalScope.NestResultScoring || {};
       const {
+        shouldSkipTailRefinement,
         buildTailRefinementCandidates,
         buildTailSubsetPayload,
         mergeTailReplacement,
@@ -176,6 +177,13 @@
       return best;
     }
     async function runTailRefinement(baseSummary, payload, baseOptions, settings) {
+      const sheet = state.sheets[0] || {};
+      if (
+        typeof shouldSkipTailRefinement === 'function'
+        && shouldSkipTailRefinement(baseSummary, sheet)
+      ) {
+        return baseSummary;
+      }
       if (
         typeof buildTailRefinementCandidates !== 'function'
         || typeof buildTailSubsetPayload !== 'function'
@@ -191,7 +199,6 @@
       const candidates = buildTailRefinementCandidates(baseSummary, payload);
       if (!candidates.length) return baseSummary;
 
-      const sheet = state.sheets[0] || {};
       const seeds = tailRefinementSeeds(settings);
       const options = tailRefinementOptions(baseOptions, settings);
       let bestSummary = baseSummary;

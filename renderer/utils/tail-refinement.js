@@ -31,6 +31,13 @@
     });
     return mapToSortedCounts(combined);
   }
+  function shouldSkipTailRefinement(summary, sheet) {
+    const strips = Array.isArray(summary?.strips) ? summary.strips : [];
+    if (!strips.length) return true;
+    if (sheet?.widthMode === 'unlimited') return true;
+    if (strips.length <= 1) return true;
+    return false;
+  }
 
   function buildTailRefinementCandidates(summary, payload, options = {}) {
     void payload;
@@ -92,6 +99,7 @@
     if (!strips.length) {
       return {
         stripCount: Infinity,
+        preferShortLastStrip: sheet?.widthMode === 'fixed' || sheet?.widthMode === 'max',
         lastDensity: 0,
         lastStripWidth: Infinity,
         totalItemCount: 0,
@@ -109,6 +117,7 @@
 
     return {
       stripCount: strips.length,
+      preferShortLastStrip: sheet?.widthMode === 'fixed' || sheet?.widthMode === 'max',
       lastDensity,
       lastStripWidth,
       totalItemCount,
@@ -121,15 +130,23 @@
     if ((candidateScore?.stripCount ?? Infinity) !== (currentScore?.stripCount ?? Infinity)) {
       return (candidateScore?.stripCount ?? Infinity) < (currentScore?.stripCount ?? Infinity);
     }
+    if (candidateScore?.preferShortLastStrip || currentScore?.preferShortLastStrip) {
+      if (((currentScore?.lastStripWidth ?? Infinity) - (candidateScore?.lastStripWidth ?? Infinity)) > tolerance) return true;
+      if (((candidateScore?.lastStripWidth ?? Infinity) - (currentScore?.lastStripWidth ?? Infinity)) > tolerance) return false;
+      if (((candidateScore?.lastDensity ?? 0) - (currentScore?.lastDensity ?? 0)) > tolerance) return true;
+      if (((currentScore?.lastDensity ?? 0) - (candidateScore?.lastDensity ?? 0)) > tolerance) return false;
+      return (candidateScore?.totalItemCount ?? 0) > (currentScore?.totalItemCount ?? 0);
+    }
     if (((candidateScore?.lastDensity ?? 0) - (currentScore?.lastDensity ?? 0)) > tolerance) return true;
     if (((currentScore?.lastDensity ?? 0) - (candidateScore?.lastDensity ?? 0)) > tolerance) return false;
-    if (((currentScore?.lastStripWidth ?? Infinity) + tolerance) < (candidateScore?.lastStripWidth ?? Infinity)) return false;
-    if (((candidateScore?.lastStripWidth ?? Infinity) + tolerance) < (currentScore?.lastStripWidth ?? Infinity)) return true;
+    if (((currentScore?.lastStripWidth ?? Infinity) - (candidateScore?.lastStripWidth ?? Infinity)) > tolerance) return true;
+    if (((candidateScore?.lastStripWidth ?? Infinity) - (currentScore?.lastStripWidth ?? Infinity)) > tolerance) return false;
     return (candidateScore?.totalItemCount ?? 0) > (currentScore?.totalItemCount ?? 0);
   }
 
   globalScope.NestTailRefinement = {
     itemCountsToMap,
+    shouldSkipTailRefinement,
     buildTailRefinementCandidates,
     buildTailSubsetPayload,
     mergeTailReplacement,
