@@ -15,6 +15,7 @@
     const FIT_INSET_Y = 28;
     const SVG_PREVIEW_MARGIN_X = 80;
     const SVG_PREVIEW_MARGIN_Y = 24;
+    let lastRenderedSvg = '';
 
     // Same logic as renderer.js — returns the 1-based engraving layer number,
     // or null if engraving is turned off. Kept here so the canvas view is self-contained.
@@ -175,20 +176,6 @@
       return serializer.serializeToString(root);
     }
 
-    // Cheap stable signature for an SVG string used to detect "same content"
-    // across polls. djb2 over ~32 byte-strided samples — enough collision
-    // resistance for our usage (same-poll equality check, not security) and
-    // O(1) regardless of SVG length.
-    function quickSvgHash(text) {
-      if (!text) return '0';
-      const len = text.length;
-      const step = Math.max(1, Math.floor(len / 32));
-      let hash = 5381;
-      for (let i = 0; i < len; i += step) {
-        hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0;
-      }
-      return String(hash);
-    }
 
     // Main SVG post-processor — applies the dark colour scheme to the raw solver output.
     // Injects a grid background, recolours part fills to navy with a blue glow, tightens
@@ -411,13 +398,11 @@
         const styled = styleStripSVG(strip.svg, strip);
         const previousIndex = dom.svgContainer.dataset.activeIndex;
         const sameStrip = previousIndex === String(sheetIndex);
-        const sameSvg = sameStrip && dom.svgContainer.dataset.svgLen === String(styled.length)
-          && dom.svgContainer.dataset.svgHash === quickSvgHash(styled);
+        const sameSvg = sameStrip && lastRenderedSvg === styled;
         if (!sameSvg) {
           dom.svgContainer.innerHTML = styled;
           dom.svgContainer.dataset.activeIndex = String(sheetIndex);
-          dom.svgContainer.dataset.svgLen = String(styled.length);
-          dom.svgContainer.dataset.svgHash = quickSvgHash(styled);
+          lastRenderedSvg = styled;
         }
         dom.svgContainer.style.display = 'grid';
         dom.emptyState.style.display = 'none';

@@ -20,6 +20,15 @@
           'by-height-or-length': { multiStripMode: 'prebucket', bucketFillWeight: null },
         },
       } = globalScope.NestSettings || {};
+      const { scoreNestSummary, isNestSummaryBetter } = globalScope.NestResultScoring || {};
+      const {
+        shouldSkipTailRefinement,
+        buildTailRefinementCandidates,
+        buildTailSubsetPayload,
+        mergeTailReplacement,
+        scoreTailRefinementSummary,
+        isTailRefinementBetter,
+      } = globalScope.NestTailRefinement || {};
       let nestInterval = null;
       let sparrowRunAborted = false;
       let activeSparrowRunId = null;
@@ -56,6 +65,189 @@
       setNestStatsTone('warning');
       dom.nestStats.textContent = message;
       dom.nestStats.title = '';
+    }
+    function delay(ms) {
+      return new Promise(resolve => window.setTimeout(resolve, ms));
+    }
+
+    function qualityRunCount(settings) {
+      return Math.max(1, Math.min(5, Math.trunc(Number(settings.multiSeedQualityRuns) || 1)));
+    }
+
+    function qualityRunSeeds(settings, count) {
+      const base = Number.isFinite(Number(settings.rngSeed)) ? Math.trunc(Number(settings.rngSeed)) : 42;
+      return [base, base + 101, base + 1009, base + 10007, base + 100003].slice(0, count);
+    }
+    function tailRefinementEnabled(settings) {
+      return qualityRunCount(settings) > 1;
+    }
+
+    function tailRefinementSeeds(settings) {
+      return qualityRunSeeds(settings, qualityRunCount(settings));
+    }
+
+    function tailRefinementOptions(baseOptions, settings) {
+      return {
+        ...baseOptions,
+        maxStripLength: null,
+        globalTime: Math.max(1, Number(settings.timeLimit) || 60),
+        earlyTermination: !!settings.earlyStopping,
+      };
+    }
+
+    function setRunControlsRunning() {
+      setStatus('running');
+      setNestStatsTone('');
+      dom.startBtn.classList.add('running');
+      dom.startBtn.disabled = true;
+      dom.stopBtn.disabled = false;
+      dom.stopBtn.classList.add('active');
+    }
+
+    function setRunControlsDone() {
+      setStatus('done');
+      setNestStatsTone('');
+      dom.nestStats.title = '';
+      dom.startBtn.classList.remove('running');
+      dom.startBtn.disabled = false;
+      dom.stopBtn.disabled = true;
+      dom.stopBtn.classList.remove('active');
+    }
+
+    async function waitForSparrowCompletion(runId) {
+      const progressText = dom.nestStats.textContent;
+      let result = await pollSparrowRun(runId);
+      while (!sparrowRunAborted) {
+        if (result?.status === 'completed' || result?.status === 'stopped') return result;
+        dom.nestStats.textContent = progressText;
+        dom.nestStats.title = '';
+        await delay(500);
+        result = await pollSparrowRun(runId);
+      }
+      return { success: true, status: 'stopped' };
+    }
+
+    async function runQualitySeedSequence(payload, baseOptions, settings) {
+      if (typeof scoreNestSummary !== 'function' || typeof isNestSummaryBetter !== 'function') {
+        throw new Error('Nest result scoring is unavailable');
+      }
+
+      const seeds = qualityRunSeeds(settings, qualityRunCount(settings));
+      let best = null;
+      let firstError = null;
+
+      for (const [index, seed] of seeds.entries()) {
+        try {
+          if (sparrowRunAborted) return null;
+          setRunControlsRunning();
+          dom.nestStats.textContent = `Quality run ${index + 1}/${seeds.length} · seed ${seed}`;
+          dom.nestStats.title = '';
+          const result = await window.electronAPI.runSparrow(payload, { ...baseOptions, rngSeed: seed });
+          if (!result?.success || !result.runId) {
+            throw new Error(result?.error || 'Failed to start Sparrow');
+          }
+
+          activeSparrowRunId = result.runId;
+          const completed = await waitForSparrowCompletion(result.runId);
+          if (completed.status === 'stopped') return null;
+          if (completed.summary?.strips?.length) {
+            const score = scoreNestSummary(completed.summary, state.sheets[0] || {});
+            if (!best || isNestSummaryBetter(score, best.score)) {
+              best = {
+                seed,
+                score,
+                summary: completed.summary,
+                inputPath: completed.inputPath || result.inputPath || null,
+              };
+            }
+          }
+        } catch (err) {
+          if (!firstError) firstError = err;
+          activeSparrowRunId = null;
+          console.warn('[Sparrow] Quality seed failed:', seed, err?.sparrowDetails || err);
+          try {
+            await window.electronAPI.stopSparrow?.();
+          } catch (stopError) {
+            console.warn('[Sparrow] Cleanup stop after quality seed failure failed:', stopError);
+          }
+        }
+      }
+
+      if (!best) throw firstError || new Error('No successful quality run');
+      return best;
+    }
+    async function runTailRefinement(baseSummary, payload, baseOptions, settings) {
+      const sheet = state.sheets[0] || {};
+      if (
+        typeof shouldSkipTailRefinement === 'function'
+        && shouldSkipTailRefinement(baseSummary, sheet)
+      ) {
+        return baseSummary;
+      }
+      if (
+        typeof buildTailRefinementCandidates !== 'function'
+        || typeof buildTailSubsetPayload !== 'function'
+        || typeof mergeTailReplacement !== 'function'
+        || typeof scoreTailRefinementSummary !== 'function'
+        || typeof isTailRefinementBetter !== 'function'
+      ) {
+        console.warn('[Sparrow] Tail refinement unavailable');
+        return baseSummary;
+      }
+      if (!tailRefinementEnabled(settings)) return baseSummary;
+
+      const candidates = buildTailRefinementCandidates(baseSummary, payload);
+      if (!candidates.length) return baseSummary;
+
+      const seeds = tailRefinementSeeds(settings);
+      const options = tailRefinementOptions(baseOptions, settings);
+      let bestSummary = baseSummary;
+      let bestScore = scoreTailRefinementSummary(baseSummary, sheet);
+      let attempted = 0;
+
+      for (const candidate of candidates) {
+        for (const seed of seeds) {
+          if (sparrowRunAborted) return null;
+          setRunControlsRunning();
+          attempted += 1;
+          dom.nestStats.textContent = 'Tail optimize ' + attempted + '/' + (candidates.length * seeds.length) + ' · ' + candidate.label + ' · seed ' + seed;
+          dom.nestStats.title = '';
+          const tailPayload = buildTailSubsetPayload(payload, candidate);
+          try {
+            const result = await window.electronAPI.runSparrow(tailPayload, { ...options, rngSeed: seed });
+            if (!result?.success || !result.runId) {
+              console.warn('[Sparrow] Tail refinement candidate failed:', candidate.id, seed, result?.error || 'Failed to start Sparrow');
+              activeSparrowRunId = null;
+              try {
+                await window.electronAPI.stopSparrow?.();
+              } catch (stopError) {
+                console.warn('[Sparrow] Cleanup stop after tail refinement launch failure failed:', stopError);
+              }
+              continue;
+            }
+            activeSparrowRunId = result.runId;
+            const completed = await waitForSparrowCompletion(result.runId);
+            if (completed.status === 'stopped') return null;
+            const merged = mergeTailReplacement(baseSummary, completed.summary, candidate);
+            if (merged === null) continue;
+            const score = scoreTailRefinementSummary(merged, sheet);
+            if (isTailRefinementBetter(score, bestScore)) {
+              bestSummary = merged;
+              bestScore = score;
+            }
+          } catch (err) {
+            console.warn('[Sparrow] Tail refinement candidate failed:', candidate.id, seed, err?.sparrowDetails || err);
+            activeSparrowRunId = null;
+            try {
+              await window.electronAPI.stopSparrow?.();
+            } catch (stopError) {
+              console.warn('[Sparrow] Cleanup stop after tail refinement failure failed:', stopError);
+            }
+          }
+        }
+      }
+
+      return bestSummary;
     }
 
     // Called on a 500ms interval while the solver is running to fetch the latest result.
@@ -109,7 +301,7 @@
         dom.startBtn.disabled = false;
         dom.stopBtn.disabled = true;
         dom.stopBtn.classList.remove('active');
-        return;
+        return result;
       }
 
       if (result.status === 'error') {
@@ -126,7 +318,10 @@
         clearInterval(nestInterval);
         nestInterval = null;
         activeSparrowRunId = null;
+        return result;
       }
+
+      return result;
     }
 
     // Wires the Start and Stop buttons.
@@ -166,14 +361,9 @@
           return;
         }
 
-        setStatus('running');
-        setNestStatsTone('');
+        setRunControlsRunning();
         dom.nestStats.title = '';
         sparrowRunAborted = false;
-        dom.startBtn.classList.add('running');
-        dom.startBtn.disabled = true;
-        dom.stopBtn.disabled = false;
-        dom.stopBtn.classList.add('active');
         state.nestResult = null;
         state.activeStripIndex = 0;
         syncExportButton();
@@ -181,6 +371,7 @@
         try {
           const primarySheet = state.sheets[0] || {};
           const settings = getCurrentNestingSettings();
+          const runCount = qualityRunCount(settings);
           const partSpacing = Number(settings.partSpacing) || 0;
           // Single multi-sheet strategy drives both the placement algorithm
           // (`multiStripMode`) and, for the legacy bucketed paths, the
@@ -203,6 +394,24 @@
             multiStripMode,
             ...(Number.isFinite(bucketFillWeight) ? { bucketFillWeight } : {}),
           };
+
+          if (runCount > 1) {
+            const best = await runQualitySeedSequence(exported.payload, sparrowOptions, settings);
+            if (best === null) return;
+            const refinedSummary = await runTailRefinement(best.summary, exported.payload, sparrowOptions, settings);
+            if (refinedSummary === null) return;
+            best.summary = refinedSummary;
+            state.nestResult = best.summary;
+            state.nestInputPath = best.inputPath;
+            state.activeStripIndex = Math.min(state.activeStripIndex || 0, Math.max(0, (best.summary.strips?.length || 1) - 1));
+            syncExportButton();
+            renderTabs();
+            showNestResult(state.activeStripIndex || 0);
+            setRunControlsDone();
+            dom.nestStats.title = `Best quality seed: ${best.seed}`;
+            return;
+          }
+
           const result = await window.electronAPI.runSparrow(exported.payload, sparrowOptions);
 
           if (!result?.success || !result.runId) {
@@ -231,7 +440,7 @@
               dom.stopBtn.disabled = true;
               dom.stopBtn.classList.remove('active');
             }
-          }, 500);
+          }, 150);
         } catch (err) {
           if (sparrowRunAborted) return;
           console.error('[Sparrow] Run failed:', err?.sparrowDetails || err);

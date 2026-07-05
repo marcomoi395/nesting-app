@@ -9,6 +9,7 @@ const {
   engravingLabelText,
   engravingVisualStyle,
 } = require('../../shared/engraving-layout');
+const { DxfWriter, point2d, point3d, LWPolylineFlags, PolylineFlags, SplineFlags, Units } = require('@tarikjabiri/dxf');
 
 const FALLBACK_LAYER_COLORS = ['#4f8ef7', '#f75f5f', '#4fcf8e', '#f7c34f', '#cf4ff7', '#4ff7e8', '#f77f4f'];
 
@@ -19,6 +20,7 @@ function registerExportDxfIpc() {
     outputDirBookmark,
     jobName,
     inputPath,
+    settings: currentSettings = null,
     exportItems = {},
     strips,
   }) => {
@@ -36,6 +38,9 @@ function registerExportDxfIpc() {
           // Fall through — will export what it can.
         }
       }
+      if (currentSettings && typeof currentSettings === 'object') {
+        Object.assign(exportSettings, normalizeSettings(currentSettings));
+      }
 
       const RAD = Math.PI / 180;
       const DEG = 180 / Math.PI;
@@ -46,7 +51,7 @@ function registerExportDxfIpc() {
         const tempPath = path.join(dir, `.${base}.${process.pid}.${Date.now()}.tmp`);
 
         try {
-          fs.writeFileSync(tempPath, contents, 'utf-8');
+          fs.writeFileSync(tempPath, normalizeDxfText(contents), 'utf-8');
           if (fs.existsSync(targetPath)) fs.rmSync(targetPath, { force: true });
           fs.renameSync(tempPath, targetPath);
 
@@ -106,6 +111,22 @@ function registerExportDxfIpc() {
       function roundUpDim(mm) {
         const numeric = Number(mm);
         return Number.isFinite(numeric) && numeric > 0 ? Math.ceil(numeric) : 0;
+      }
+      function sanitizeDxfName(value, fallback = '0') {
+        const raw = String(value == null ? '' : value).trim();
+        if (!raw) return fallback;
+        const ascii = raw
+          .normalize('NFKD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^\x20-\x7E]/g, '_')
+          .replace(/[^A-Za-z0-9 _.$-]/g, '_')
+          .replace(/\s+/g, ' ')
+          .trim();
+        return ascii || fallback;
+      }
+
+      function normalizeDxfText(contents) {
+        return String(contents).replace(/\r?\n/g, '\r\n').replace(/(?<!\r\n)$/u, '\r\n');
       }
 
       function exportSheetFileBase(strip, orderIndex) {
@@ -360,18 +381,21 @@ function registerExportDxfIpc() {
         return [...passthrough, ...merged];
       }
 
-      function writeColor(lines, entity) {
+      function dxfEntityOptions(entity) {
         const color = entityColorCodes(entity);
-        if (!color) return;
-        if (color.type === 'aci') {
-          lines.push('62', String(color.value));
+        const options = { layerName: sanitizeDxfName(entity?.layer, '0') };
+        if (color?.type === 'aci') options.colorNumber = color.value;
+        const extrusion = entity?.extrusionDirection || null;
+        if (extrusion && (Number.isFinite(extrusion.x) || Number.isFinite(extrusion.y) || Number.isFinite(extrusion.z))) {
+          options.extrusion = point3d(Number(extrusion.x || 0), Number(extrusion.y || 0), Number.isFinite(extrusion.z) ? Number(extrusion.z) : 1);
         }
+        return options;
       }
 
       function collectLayerDefs(sheetStrips) {
         const layerMap = new Map();
         const addLayer = (name, color) => {
-          const layerName = String(name || '0');
+          const layerName = sanitizeDxfName(name, '0');
           const nextColor = color || '#CCCCCC';
           const existing = layerMap.get(layerName);
           if (!existing) {
@@ -421,6 +445,11 @@ function registerExportDxfIpc() {
       function labelForItem(item) {
         const sourceName = item?.export?.source_name || item?.dxf || '';
         return path.basename(String(sourceName)).replace(/\.dxf$/i, '');
+      }
+
+      function blockNameForItem(item, itemId) {
+        const label = labelForItem(item);
+        return sanitizeDxfName(`PART_${itemId}_${label}`, `PART_${itemId || 0}`);
       }
 
       function bboxFromPolygon(points) {
@@ -670,18 +699,12 @@ function registerExportDxfIpc() {
         return entities;
       }
 
-      function writeEntity(lines, entity, rotation, tx, ty, emitDebug = null, nextHandle = null) {
+      function addDxfEntity(dxf, entity, rotation, tx, ty, emitDebug = null) {
         if (!entity?.type) {
           if (emitDebug) emitDebug.skipped.push({ reason: 'missing-type', entity: entity || null });
           return false;
         }
-        const layer = entity.layer || '0';
-        const pushHeader = (typeName) => {
-          lines.push('0', typeName);
-          if (nextHandle) lines.push('5', nextHandle());
-          lines.push('100', 'AcDbEntity');
-          lines.push('8', layer);
-        };
+        const layer = sanitizeDxfName(entity.layer, '0');
 
         if (entity.type === 'LINE') {
           const startPoint = entity.start || (Array.isArray(entity.vertices) && entity.vertices.length >= 2 ? entity.vertices[0] : null);
@@ -705,22 +728,14 @@ function registerExportDxfIpc() {
           }
           const start = transformPoint(startPoint, rotation, tx, ty);
           const end = transformPoint(endPoint, rotation, tx, ty);
-          pushHeader('LINE');
-          writeColor(lines, entity);
-          lines.push('100', 'AcDbLine');
-          lines.push('10', `${start.x}`, '20', `${start.y}`, '30', `${start.z || 0}`);
-          lines.push('11', `${end.x}`, '21', `${end.y}`, '31', `${end.z || 0}`);
+          dxf.addLine(point3d(start.x, start.y, start.z || 0), point3d(end.x, end.y, end.z || 0), dxfEntityOptions(entity));
           if (emitDebug) emitDebug.emitted.LINE = (emitDebug.emitted.LINE || 0) + 1;
           return true;
         }
 
         if (entity.type === 'CIRCLE' && entity.center && Number.isFinite(entity.radius)) {
           const center = transformPoint(entity.center, rotation, tx, ty);
-          pushHeader('CIRCLE');
-          writeColor(lines, entity);
-          lines.push('100', 'AcDbCircle');
-          lines.push('10', `${center.x}`, '20', `${center.y}`, '30', `${center.z || 0}`);
-          lines.push('40', `${entity.radius}`);
+          dxf.addCircle(point3d(center.x, center.y, center.z || 0), Number(entity.radius), dxfEntityOptions(entity));
           if (emitDebug) emitDebug.emitted.CIRCLE = (emitDebug.emitted.CIRCLE || 0) + 1;
           return true;
         }
@@ -729,16 +744,7 @@ function registerExportDxfIpc() {
           const center = transformPoint(entity.center, rotation, tx, ty);
           const startDeg = normalizeDegrees((Number(entity.startAngle || 0) * DEG) + rotation);
           const endDeg = normalizeDegrees((Number(entity.endAngle || 0) * DEG) + rotation);
-          pushHeader('ARC');
-          writeColor(lines, entity);
-          lines.push('100', 'AcDbCircle');
-          lines.push('10', `${center.x}`, '20', `${center.y}`, '30', `${center.z || 0}`);
-          lines.push('40', `${entity.radius}`);
-          // ARC inherits from CIRCLE, so strict DXF readers expect the circle
-          // data to appear before the AcDbArc subclass marker.
-          lines.push('100', 'AcDbArc');
-          lines.push('50', `${startDeg}`);
-          lines.push('51', `${endDeg}`);
+          dxf.addArc(point3d(center.x, center.y, center.z || 0), Number(entity.radius), startDeg, endDeg, dxfEntityOptions(entity));
           if (emitDebug) emitDebug.emitted.ARC = (emitDebug.emitted.ARC || 0) + 1;
           return true;
         }
@@ -746,41 +752,29 @@ function registerExportDxfIpc() {
         if (entity.type === 'LWPOLYLINE' && Array.isArray(entity.vertices) && entity.vertices.length >= 2) {
           const closed = polylineClosed(entity);
           const normalizedVertices = normalizeClosedPolylineVertices(entity.vertices, closed);
-          const verts = normalizedVertices.map(vertex => transformPoint({
-            x: vertex.x,
-            y: vertex.y,
-            z: Number.isFinite(vertex.z) ? vertex.z : (Number.isFinite(entity.elevation) ? entity.elevation : 0),
-          }, rotation, tx, ty));
-          const uniformWidth = Number.isFinite(entity.width) ? entity.width : 0;
-          const extrusion = {
-            x: Number.isFinite(entity.extrusionDirectionX) ? entity.extrusionDirectionX : 0,
-            y: Number.isFinite(entity.extrusionDirectionY) ? entity.extrusionDirectionY : 0,
-            z: Number.isFinite(entity.extrusionDirectionZ) ? entity.extrusionDirectionZ : 1,
-          };
-
-          pushHeader('LWPOLYLINE');
-          writeColor(lines, entity);
-          lines.push('100', 'AcDbPolyline');
-          lines.push('90', `${verts.length}`);
-          lines.push('70', `${lwPolylineFlags(entity)}`);
-          // Emit constant width explicitly, even when zero, because some DXF
-          // readers treat closed bulged LWPOLYLINEs more reliably when group
-          // code 43 is present exactly like many source files export it.
-          lines.push('43', `${uniformWidth}`);
-          if (Number.isFinite(entity.elevation) && entity.elevation !== 0) lines.push('38', `${entity.elevation}`);
-          if (Number.isFinite(entity.depth) && entity.depth !== 0) lines.push('39', `${entity.depth}`);
-          if (extrusion.x !== 0 || extrusion.y !== 0 || extrusion.z !== 1) {
-            lines.push('210', `${extrusion.x}`, '220', `${extrusion.y}`, '230', `${extrusion.z}`);
-          }
-          verts.forEach((point, index) => {
-            const source = normalizedVertices[index] || {};
-            lines.push('10', `${point.x}`, '20', `${point.y}`);
-            if (uniformWidth === 0) {
-              if (Number.isFinite(source.startWidth) && source.startWidth !== 0) lines.push('40', `${source.startWidth}`);
-              if (Number.isFinite(source.endWidth) && source.endWidth !== 0) lines.push('41', `${source.endWidth}`);
-            }
-            if (Number.isFinite(source.bulge) && source.bulge !== 0) lines.push('42', `${source.bulge}`);
+          const vertices = normalizedVertices.map(vertex => {
+            const point = transformPoint({
+              x: vertex.x,
+              y: vertex.y,
+              z: Number.isFinite(vertex.z) ? vertex.z : (Number.isFinite(entity.elevation) ? entity.elevation : 0),
+            }, rotation, tx, ty);
+            const entry = { point: point2d(point.x, point.y) };
+            if (Number.isFinite(vertex.startWidth)) entry.startingWidth = vertex.startWidth;
+            if (Number.isFinite(vertex.endWidth)) entry.endWidth = vertex.endWidth;
+            if (Number.isFinite(vertex.bulge)) entry.bulge = vertex.bulge;
+            return entry;
           });
+          const uniformWidth = Number.isFinite(entity.width) ? entity.width : 0;
+          const flags = (polylineClosed(entity) ? LWPolylineFlags.Closed : LWPolylineFlags.None) |
+            (entity?.hasContinuousLinetypePattern ? LWPolylineFlags.Plinegen : 0);
+          const options = {
+            ...dxfEntityOptions(entity),
+            flags,
+            constantWidth: uniformWidth,
+          };
+          if (Number.isFinite(entity.elevation)) options.elevation = entity.elevation;
+          if (Number.isFinite(entity.depth)) options.thickness = entity.depth;
+          dxf.addLWPolyline(vertices, options);
           if (emitDebug) emitDebug.emitted.LWPOLYLINE = (emitDebug.emitted.LWPOLYLINE || 0) + 1;
           return true;
         }
@@ -788,46 +782,42 @@ function registerExportDxfIpc() {
         if (entity.type === 'POLYLINE' && Array.isArray(entity.vertices) && entity.vertices.length >= 2) {
           const closed = polylineClosed(entity);
           const normalizedVertices = normalizeClosedPolylineVertices(entity.vertices, closed);
-          const extrusion = entity.extrusionDirection || {};
-          pushHeader('POLYLINE');
-          writeColor(lines, entity);
-          lines.push('66', '1');
-          lines.push('100', 'AcDb2dPolyline');
-          lines.push('10', '0', '20', '0', '30', `${Number.isFinite(entity.elevation) ? entity.elevation : 0}`);
-          if (Number.isFinite(entity.thickness) && entity.thickness !== 0) lines.push('39', `${entity.thickness}`);
-          lines.push('70', `${polylineFlags(entity)}`);
-          if (extrusion.x || extrusion.y || Number.isFinite(extrusion.z)) {
-            lines.push(
-              '210', `${Number(extrusion.x || 0)}`,
-              '220', `${Number(extrusion.y || 0)}`,
-              '230', `${Number.isFinite(extrusion.z) ? Number(extrusion.z) : 1}`
-            );
+          if (entity.is3dPolyline) {
+            const vertices = normalizedVertices.map(vertex => {
+              const point = transformPoint(vertex, rotation, tx, ty);
+              const entry = { point: point3d(point.x, point.y, point.z || 0) };
+              if (Number.isFinite(vertex.startWidth)) entry.startingWidth = vertex.startWidth;
+              if (Number.isFinite(vertex.endWidth)) entry.endWidth = vertex.endWidth;
+              if (Number.isFinite(vertex.bulge)) entry.bulge = vertex.bulge;
+              return entry;
+            });
+            dxf.addPolyline3D(vertices, {
+              ...dxfEntityOptions(entity),
+              flags: polylineFlags(entity) | PolylineFlags.Polyline3D,
+            });
+          } else {
+            const vertices = normalizedVertices.map(vertex => {
+              const point = transformPoint({
+                x: vertex.x,
+                y: vertex.y,
+                z: Number.isFinite(vertex.z) ? vertex.z : (Number.isFinite(entity.elevation) ? entity.elevation : 0),
+              }, rotation, tx, ty);
+              const entry = { point: point2d(point.x, point.y) };
+              if (Number.isFinite(vertex.startWidth)) entry.startingWidth = vertex.startWidth;
+              if (Number.isFinite(vertex.endWidth)) entry.endWidth = vertex.endWidth;
+              if (Number.isFinite(vertex.bulge)) entry.bulge = vertex.bulge;
+              return entry;
+            });
+            const options = {
+              ...dxfEntityOptions(entity),
+              flags: (polylineClosed(entity) ? LWPolylineFlags.Closed : LWPolylineFlags.None) |
+                (entity?.hasContinuousLinetypePattern ? LWPolylineFlags.Plinegen : 0),
+            };
+            if (Number.isFinite(entity.width)) options.constantWidth = entity.width;
+            if (Number.isFinite(entity.elevation)) options.elevation = entity.elevation;
+            if (Number.isFinite(entity.thickness)) options.thickness = entity.thickness;
+            dxf.addLWPolyline(vertices, options);
           }
-
-          normalizedVertices.forEach(vertex => {
-            const point = transformPoint(vertex, rotation, tx, ty);
-            lines.push('0', 'VERTEX');
-            if (nextHandle) lines.push('5', nextHandle());
-            lines.push('100', 'AcDbEntity');
-            lines.push('8', layer);
-            lines.push('100', 'AcDbVertex');
-            lines.push('100', entity.is3dPolyline ? 'AcDb3dPolylineVertex' : 'AcDb2dVertex');
-            lines.push('10', `${point.x}`, '20', `${point.y}`, '30', `${point.z || 0}`);
-            const flags = polylineVertexFlags(vertex);
-            if (flags) lines.push('70', `${flags}`);
-            if (Number.isFinite(vertex.startWidth) && vertex.startWidth !== 0) lines.push('40', `${vertex.startWidth}`);
-            if (Number.isFinite(vertex.endWidth) && vertex.endWidth !== 0) lines.push('41', `${vertex.endWidth}`);
-            if (Number.isFinite(vertex.bulge) && vertex.bulge !== 0) lines.push('42', `${vertex.bulge}`);
-            if (Number.isFinite(vertex.faceA)) lines.push('71', `${vertex.faceA}`);
-            if (Number.isFinite(vertex.faceB)) lines.push('72', `${vertex.faceB}`);
-            if (Number.isFinite(vertex.faceC)) lines.push('73', `${vertex.faceC}`);
-            if (Number.isFinite(vertex.faceD)) lines.push('74', `${vertex.faceD}`);
-          });
-
-          lines.push('0', 'SEQEND');
-          if (nextHandle) lines.push('5', nextHandle());
-          lines.push('100', 'AcDbEntity');
-          lines.push('8', layer);
           if (emitDebug) emitDebug.emitted.POLYLINE = (emitDebug.emitted.POLYLINE || 0) + 1;
           return true;
         }
@@ -835,59 +825,68 @@ function registerExportDxfIpc() {
         if (entity.type === 'ELLIPSE' && entity.center && entity.majorAxisEndPoint) {
           const center = transformPoint(entity.center, rotation, tx, ty);
           const major = rotateVector(entity.majorAxisEndPoint, rotation);
-          pushHeader('ELLIPSE');
-          writeColor(lines, entity);
-          lines.push('100', 'AcDbEllipse');
-          lines.push('10', `${center.x}`, '20', `${center.y}`, '30', `${center.z || 0}`);
-          lines.push('11', `${major.x}`, '21', `${major.y}`, '31', `${major.z || 0}`);
-          lines.push('40', `${entity.axisRatio || 1}`);
-          if (Number.isFinite(entity.startParameter)) lines.push('41', `${entity.startParameter}`);
-          if (Number.isFinite(entity.endParameter)) lines.push('42', `${entity.endParameter}`);
+          dxf.addEllipse(
+            point3d(center.x, center.y, center.z || 0),
+            point3d(major.x, major.y, major.z || 0),
+            Number(entity.axisRatio || 1),
+            Number.isFinite(entity.startParameter) ? entity.startParameter : 0,
+            Number.isFinite(entity.endParameter) ? entity.endParameter : Math.PI * 2,
+            dxfEntityOptions(entity)
+          );
           if (emitDebug) emitDebug.emitted.ELLIPSE = (emitDebug.emitted.ELLIPSE || 0) + 1;
           return true;
         }
 
         if (entity.type === 'SPLINE' && (entity.controlPoints?.length || entity.fitPoints?.length)) {
-          const controlPoints = (entity.controlPoints || []).map(point => transformPoint(point, rotation, tx, ty));
-          const fitPoints = (entity.fitPoints || []).map(point => transformPoint(point, rotation, tx, ty));
+          const controlPoints = (entity.controlPoints || []).map(point => {
+            const transformed = transformPoint(point, rotation, tx, ty);
+            return point3d(transformed.x, transformed.y, transformed.z || 0);
+          });
+          const fitPoints = (entity.fitPoints || []).map(point => {
+            const transformed = transformPoint(point, rotation, tx, ty);
+            return point3d(transformed.x, transformed.y, transformed.z || 0);
+          });
+          const degreeCurve = Number(entity.degreeOfSplineCurve || 3);
+          if (controlPoints.length < degreeCurve + 1) {
+            if (emitDebug) {
+              emitDebug.skipped.push({
+                reason: 'unsupported-spline',
+                type: 'SPLINE',
+                layer,
+                controlPointCount: controlPoints.length,
+                fitPointCount: fitPoints.length,
+              });
+            }
+            return false;
+          }
           const knotValues = Array.isArray(entity.knotValues)
             ? entity.knotValues
             : (Array.isArray(entity.knots) ? entity.knots : []);
-          const splineFlags =
-            (entity.closed ? 1 : 0) |
-            (entity.periodic ? 2 : 0) |
-            (entity.rational ? 4 : 0) |
-            (entity.planar ? 8 : 0) |
-            (entity.linear ? 16 : 0);
-          pushHeader('SPLINE');
-          writeColor(lines, entity);
-          lines.push('100', 'AcDbSpline');
-          lines.push('70', `${splineFlags}`);
-          lines.push('71', `${entity.degreeOfSplineCurve || 3}`);
-          lines.push('72', `${knotValues.length}`);
-          lines.push('73', `${controlPoints.length}`);
-          lines.push('74', `${fitPoints.length}`);
-          knotValues.forEach(knot => lines.push('40', `${knot}`));
-          controlPoints.forEach(point => {
-            lines.push('10', `${point.x}`, '20', `${point.y}`, '30', `${point.z || 0}`);
-          });
-          fitPoints.forEach(point => {
-            lines.push('11', `${point.x}`, '21', `${point.y}`, '31', `${point.z || 0}`);
-          });
-          if (entity.startTangent) {
-            const tangent = rotateVector(entity.startTangent, rotation);
-            lines.push('12', `${tangent.x}`, '22', `${tangent.y}`, '32', `${tangent.z || 0}`);
-          }
-          if (entity.endTangent) {
-            const tangent = rotateVector(entity.endTangent, rotation);
-            lines.push('13', `${tangent.x}`, '23', `${tangent.y}`, '33', `${tangent.z || 0}`);
-          }
-          if (entity.normalVector) {
-            lines.push(
-              '210', `${Number(entity.normalVector.x || 0)}`,
-              '220', `${Number(entity.normalVector.y || 0)}`,
-              '230', `${Number.isFinite(entity.normalVector.z) ? Number(entity.normalVector.z) : 1}`
-            );
+          const flags =
+            (entity.closed ? SplineFlags.Closed : 0) |
+            (entity.periodic ? SplineFlags.Periodic : 0) |
+            (entity.rational ? SplineFlags.Rational : 0) |
+            (entity.planar ? SplineFlags.Planar : 0) |
+            (entity.linear ? SplineFlags.Linear : 0);
+          try {
+            dxf.addSpline({
+              controlPoints,
+              fitPoints,
+              degreeCurve,
+              knots: knotValues,
+              flags,
+            }, dxfEntityOptions(entity));
+          } catch {
+            if (emitDebug) {
+              emitDebug.skipped.push({
+                reason: 'unsupported-spline',
+                type: 'SPLINE',
+                layer,
+                controlPointCount: controlPoints.length,
+                fitPointCount: fitPoints.length,
+              });
+            }
+            return false;
           }
           if (emitDebug) emitDebug.emitted.SPLINE = (emitDebug.emitted.SPLINE || 0) + 1;
           return true;
@@ -936,7 +935,6 @@ function registerExportDxfIpc() {
             const c = transformPoint(entity.center || {}, rotation, tx, ty);
             expandR(c.x, c.y, Number(entity.radius) || 0);
           } else if (entity.type === 'ARC') {
-            // Use a conservative circle envelope — good enough for EXTMIN/EXTMAX.
             const c = transformPoint(entity.center || {}, rotation, tx, ty);
             expandR(c.x, c.y, Number(entity.radius) || 0);
           } else if (entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE') {
@@ -959,225 +957,50 @@ function registerExportDxfIpc() {
         return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
       }
 
-      function buildDXF(sheetEntities, engravings, layerDefs, emitDebug) {
-        const lines = [];
-        const L = s => lines.push(s);
-        let handleSeed = 0x100;
-        const nextHandle = () => (handleSeed++).toString(16).toUpperCase();
+      function buildDXF(sheetEntities, engravings, layerDefs, emitDebug, sketchPlacements = []) {
+        const dxf = new DxfWriter();
+        dxf.setUnits(Units.Millimeters);
 
-        // Compute drawing extents up front so the HEADER can reference them.
-        // Many viewers (and all cutting-machine software) require $EXTMIN/$EXTMAX
-        // to know the drawing boundaries before reading entity data.
         const bbox = computeSheetBbox(sheetEntities);
         const bMinX = bbox ? +bbox.minX.toFixed(4) : 0;
         const bMinY = bbox ? +bbox.minY.toFixed(4) : 0;
         const bMaxX = bbox ? +bbox.maxX.toFixed(4) : 0;
         const bMaxY = bbox ? +bbox.maxY.toFixed(4) : 0;
 
-        L('0'); L('SECTION');
-        L('2'); L('HEADER');
-        L('9'); L('$ACADVER');
-        L('1'); L('AC1014');
-        L('9'); L('$HANDSEED');
-        L('5'); L('FFFF');
-        L('9'); L('$INSBASE');
-        L('10'); L('0.0');
-        L('20'); L('0.0');
-        L('30'); L('0.0');
-        L('9'); L('$EXTMIN');
-        L('10'); L(`${bMinX}`);
-        L('20'); L(`${bMinY}`);
-        L('30'); L('0.0');
-        L('9'); L('$EXTMAX');
-        L('10'); L(`${bMaxX}`);
-        L('20'); L(`${bMaxY}`);
-        L('30'); L('0.0');
-        L('9'); L('$LIMMIN');
-        L('10'); L('0.0');
-        L('20'); L('0.0');
-        L('9'); L('$LIMMAX');
-        L('10'); L(`${Math.ceil(bMaxX)}`);
-        L('20'); L(`${Math.ceil(bMaxY)}`);
-        L('9'); L('$CLAYER');
-        L('8'); L('0');
-        L('9'); L('$LTSCALE');
-        L('40'); L('1.0');
-        L('9'); L('$TEXTSTYLE');
-        L('7'); L('STANDARD');
-        L('0'); L('ENDSEC');
+        dxf.setVariable('$EXTMIN', { 10: bMinX, 20: bMinY, 30: 0 });
+        dxf.setVariable('$EXTMAX', { 10: bMaxX, 20: bMaxY, 30: 0 });
+        dxf.setVariable('$LIMMIN', { 10: 0, 20: 0 });
+        dxf.setVariable('$LIMMAX', { 10: Math.ceil(bMaxX), 20: Math.ceil(bMaxY) });
+        dxf.setVariable('$LTSCALE', { 40: 1.0 });
+        dxf.setCurrentLayerName('0');
 
-        L('0'); L('SECTION');
-        L('2'); L('TABLES');
-
-        L('0'); L('TABLE');
-        L('2'); L('VPORT');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbSymbolTable');
-        L('70'); L('0');
-        L('0'); L('ENDTAB');
-
-        L('0'); L('TABLE');
-        L('2'); L('LTYPE');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbSymbolTable');
-        L('70'); L('3');
-        L('0'); L('LTYPE');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbSymbolTableRecord');
-        L('100'); L('AcDbLinetypeTableRecord');
-        L('2'); L('BYBLOCK');
-        L('70'); L('0');
-        L('0'); L('LTYPE');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbSymbolTableRecord');
-        L('100'); L('AcDbLinetypeTableRecord');
-        L('2'); L('BYLAYER');
-        L('70'); L('0');
-        L('0'); L('LTYPE');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbSymbolTableRecord');
-        L('100'); L('AcDbLinetypeTableRecord');
-        L('2'); L('CONTINUOUS');
-        L('70'); L('0');
-        L('3'); L('Solid line');
-        L('72'); L('65');
-        L('73'); L('0');
-        L('40'); L('0.0');
-        L('0'); L('ENDTAB');
-
-        L('0'); L('TABLE');
-        L('2'); L('STYLE');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbSymbolTable');
-        L('70'); L('1');
-        L('0'); L('STYLE');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbSymbolTableRecord');
-        L('100'); L('AcDbTextStyleTableRecord');
-        L('2'); L('STANDARD');
-        L('70'); L('0');
-        L('40'); L('0.0');
-        L('41'); L('1.0');
-        L('50'); L('0.0');
-        L('71'); L('0');
-        L('42'); L('1.0');
-        L('3'); L('');
-        // Group code 4 (BigFont filename) intentionally omitted — an empty value
-        // produces a blank line in the output that many DXF parsers reject.
-        L('0'); L('ENDTAB');
-
-        L('0'); L('TABLE');
-        L('2'); L('VIEW');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbSymbolTable');
-        L('70'); L('0');
-        L('0'); L('ENDTAB');
-
-        L('0'); L('TABLE');
-        L('2'); L('UCS');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbSymbolTable');
-        L('70'); L('0');
-        L('0'); L('ENDTAB');
-
-        L('0'); L('TABLE');
-        L('2'); L('APPID');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbSymbolTable');
-        L('70'); L('1');
-        L('0'); L('APPID');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbSymbolTableRecord');
-        L('100'); L('AcDbRegAppTableRecord');
-        L('2'); L('ACAD');
-        L('70'); L('0');
-        L('0'); L('ENDTAB');
-
-        L('0'); L('TABLE');
-        L('2'); L('DIMSTYLE');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbSymbolTable');
-        L('70'); L('0');
-        L('0'); L('ENDTAB');
-
-        L('0'); L('TABLE');
-        L('2'); L('BLOCK_RECORD');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbSymbolTable');
-        L('70'); L('2');
-        L('0'); L('BLOCK_RECORD');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbSymbolTableRecord');
-        L('100'); L('AcDbBlockTableRecord');
-        L('2'); L('*MODEL_SPACE');
-        L('0'); L('BLOCK_RECORD');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbSymbolTableRecord');
-        L('100'); L('AcDbBlockTableRecord');
-        L('2'); L('*PAPER_SPACE');
-        L('0'); L('ENDTAB');
-
-        L('0'); L('TABLE');
-        L('2'); L('LAYER');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbSymbolTable');
-        L('70'); L(String(layerDefs.length));
         layerDefs.forEach(layer => {
-          L('0'); L('LAYER');
-          L('5'); L(nextHandle());
-          L('100'); L('AcDbSymbolTableRecord');
-          L('100'); L('AcDbLayerTableRecord');
-          L('2'); L(layer.name);
-          L('70'); L('0');
-          L('62'); L(String(approxAciFromHex(layer.color)));
-          L('6'); L('CONTINUOUS');
+          if (layer.name === '0') return;
+          try {
+            dxf.addLayer(layer.name, approxAciFromHex(layer.color), 'Continuous');
+          } catch {
+            // Defensive only: collectLayerDefs already de-duplicates sanitized names.
+          }
         });
-        L('0'); L('ENDTAB');
 
-        L('0'); L('ENDSEC');
+        if (exportSettings.useBlocks !== false) {
+          const definedBlocks = new Set();
+          sketchPlacements.forEach(placement => {
+            if (!placement?.blockName || definedBlocks.has(placement.blockName)) return;
+            const block = dxf.addBlock(placement.blockName);
+            placement.entities.forEach(entity => addDxfEntity(block, entity, 0, 0, 0, emitDebug));
+            definedBlocks.add(placement.blockName);
+          });
 
-        L('0'); L('SECTION');
-        L('2'); L('BLOCKS');
-        L('0'); L('BLOCK');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbEntity');
-        L('100'); L('AcDbBlockBegin');
-        L('8'); L('0');
-        L('2'); L('*MODEL_SPACE');
-        L('70'); L('0');
-        L('10'); L('0');
-        L('20'); L('0');
-        L('30'); L('0');
-        L('3'); L('*MODEL_SPACE');
-        L('1'); L('');
-        L('0'); L('ENDBLK');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbEntity');
-        L('100'); L('AcDbBlockEnd');
-        L('8'); L('0');
-        L('0'); L('BLOCK');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbEntity');
-        L('100'); L('AcDbBlockBegin');
-        L('8'); L('0');
-        L('2'); L('*PAPER_SPACE');
-        L('70'); L('0');
-        L('10'); L('0');
-        L('20'); L('0');
-        L('30'); L('0');
-        L('3'); L('*PAPER_SPACE');
-        L('1'); L('');
-        L('0'); L('ENDBLK');
-        L('5'); L(nextHandle());
-        L('100'); L('AcDbEntity');
-        L('100'); L('AcDbBlockEnd');
-        L('8'); L('0');
-        L('0'); L('ENDSEC');
+          sketchPlacements.forEach(placement => {
+            dxf.modelSpace.addInsert(placement.blockName, point3d(placement.tx, placement.ty, 0), {
+              rotationAngle: placement.rotation,
+            });
+          });
+        } else {
+          sheetEntities.forEach(entity => addDxfEntity(dxf, entity.entity, entity.rotation, entity.tx, entity.ty, emitDebug));
+        }
 
-        L('0'); L('SECTION');
-        L('2'); L('ENTITIES');
-
-        sheetEntities.forEach(entity => writeEntity(lines, entity.entity, entity.rotation, entity.tx, entity.ty, emitDebug, nextHandle));
         engravings.forEach(engraving => {
           if (engraving.engravingLayer && engraving.placedPolygon?.length) {
             const labelEntities = buildStrokeLabelEntities(
@@ -1187,33 +1010,12 @@ function registerExportDxfIpc() {
               engraving.placedHoles || [],
             );
             labelEntities.forEach(entity => {
-              writeEntity(lines, entity, 0, 0, 0, emitDebug, nextHandle);
+              addDxfEntity(dxf, entity, 0, 0, 0, emitDebug);
             });
           }
         });
 
-        L('0'); L('ENDSEC');
-
-        const namedObjHandle = nextHandle();
-        const groupDictHandle = nextHandle();
-        L('0'); L('SECTION');
-        L('2'); L('OBJECTS');
-        L('0'); L('DICTIONARY');
-        L('5'); L(namedObjHandle);
-        L('100'); L('AcDbDictionary');
-        L('281'); L('1');
-        L('3'); L('ACAD_GROUP');
-        L('350'); L(groupDictHandle);
-        L('0'); L('DICTIONARY');
-        L('5'); L(groupDictHandle);
-        L('330'); L(namedObjHandle);
-        L('100'); L('AcDbDictionary');
-        L('281'); L('1');
-        L('0'); L('ENDSEC');
-
-        L('0'); L('EOF');
-
-        return lines.join('\n');
+        return dxf.stringify();
       }
 
       let fileCount = 0;
@@ -1231,6 +1033,7 @@ function registerExportDxfIpc() {
 
         const placedItems = stripData.solution?.layout?.placed_items || [];
         const sheetEntities = [];
+        const sketchPlacements = [];
         const engravings = [];
         const debugRows = [];
         const emitDebug = { emitted: {}, skipped: [] };
@@ -1267,6 +1070,7 @@ function registerExportDxfIpc() {
             ? joinConnectedLineworkEntities(rawEntities)
             : rawEntities;
           let usedFallback = false;
+          let blockEntities = entities;
           if (entities.length) {
             entities.forEach(entity => {
               sheetEntities.push({
@@ -1278,11 +1082,16 @@ function registerExportDxfIpc() {
             });
           } else {
             usedFallback = true;
+            const fallbackEntity = {
+              type: 'LWPOLYLINE',
+              layer: '0',
+              closed: true,
+              vertices: sourcePolygon.map(([x, y]) => ({ x, y, z: 0 })),
+            };
+            blockEntities = [fallbackEntity];
             sheetEntities.push({
               entity: {
-                type: 'LWPOLYLINE',
-                layer: '0',
-                closed: true,
+                ...fallbackEntity,
                 vertices: pts.map(([x, y]) => ({ x, y, z: 0 })),
               },
               rotation: 0,
@@ -1290,6 +1099,14 @@ function registerExportDxfIpc() {
               ty: 0,
             });
           }
+
+          sketchPlacements.push({
+            blockName: blockNameForItem(item, placement.item_id),
+            entities: blockEntities,
+            rotation,
+            tx,
+            ty,
+          });
 
           debugRows.push({
             item_id: placement.item_id,
@@ -1305,13 +1122,14 @@ function registerExportDxfIpc() {
             used_fallback_polygon: usedFallback,
             engraving_layer: getEngravingLayer(item)?.name || null,
             label: labelForItem(item),
+            block_name: blockNameForItem(item, placement.item_id),
             rotation,
             translation: [tx, ty],
           });
         });
 
         const layerDefs = collectLayerDefs([{ placedItems }]);
-        const dxf = buildDXF(sheetEntities, engravings, layerDefs, emitDebug);
+        const dxf = buildDXF(sheetEntities, engravings, layerDefs, emitDebug, sketchPlacements);
         const fileBase = exportSheetFileBase(strip, exportIndex);
         const outPath = path.join(outputDir, `${fileBase}.dxf`);
         const debugPath = path.join(outputDir, `${fileBase}.debug.json`);

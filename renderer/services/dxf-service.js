@@ -10,6 +10,8 @@
       effectiveFileQty,
       partLabelFromName,
       buildJobName,
+      roundCoord,
+      sameExportPoint,
     } = globalScope.NestHelpers;
 
     function engravingLayerIndex(settings = getCurrentNestingSettings()) {
@@ -95,6 +97,91 @@
         console.warn(`[DXF] Failed to pre-parse ${file.name}:`, error.message);
       }
     }
+    function stripClosingPoint(points) {
+      if (!Array.isArray(points) || points.length < 2) return Array.isArray(points) ? [...points] : [];
+      return sameExportPoint(points[0], points[points.length - 1]) ? points.slice(0, -1) : [...points];
+    }
+
+    function isCollinearPoint(prev, point, next) {
+      if (!prev || !point || !next) return false;
+      const abx = point.x - prev.x;
+      const aby = point.y - prev.y;
+      const bcx = next.x - point.x;
+      const bcy = next.y - point.y;
+      const cross = roundCoord(abx * bcy - aby * bcx);
+      if (Math.abs(cross) > 1e-4) return false;
+      const dot = (point.x - prev.x) * (point.x - next.x) + (point.y - prev.y) * (point.y - next.y);
+      return dot <= 1e-8;
+    }
+
+    function dropCollinearPoints(points) {
+      if (!Array.isArray(points) || points.length < 4) return Array.isArray(points) ? [...points] : [];
+      const filtered = points.filter((point, index, all) => !isCollinearPoint(
+        all[(index - 1 + all.length) % all.length],
+        point,
+        all[(index + 1) % all.length]
+      ));
+      return filtered.length >= 3 ? filtered : points;
+    }
+
+    function cleanSolverRing(points) {
+      const sanitized = sanitizePolygonPoints(points);
+      if (sanitized.length < 3) return [];
+      const openRing = stripClosingPoint(sanitized);
+      if (openRing.length < 3) return [];
+      return dropCollinearPoints(openRing);
+    }
+
+    function normalizeSolverRing(points, origin) {
+      return points.map(point => ({
+        x: roundCoord(point.x - origin.x),
+        y: roundCoord(point.y - origin.y),
+      }));
+    }
+    function normalizeExportPoint(point, origin) {
+      if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return point;
+      return {
+        ...point,
+        x: roundCoord(point.x - origin.x),
+        y: roundCoord(point.y - origin.y),
+      };
+    }
+
+    function normalizeExportEntity(entity, origin) {
+      if (!entity || !origin) return entity;
+      return {
+        ...entity,
+        start: normalizeExportPoint(entity.start, origin),
+        end: normalizeExportPoint(entity.end, origin),
+        center: normalizeExportPoint(entity.center, origin),
+        vertices: Array.isArray(entity.vertices)
+          ? entity.vertices.map(vertex => normalizeExportPoint(vertex, origin))
+          : entity.vertices,
+        fitPoints: Array.isArray(entity.fitPoints)
+          ? entity.fitPoints.map(point => normalizeExportPoint(point, origin))
+          : entity.fitPoints,
+        controlPoints: Array.isArray(entity.controlPoints)
+          ? entity.controlPoints.map(point => normalizeExportPoint(point, origin))
+          : entity.controlPoints,
+      };
+    }
+
+    function buildSolverShapeGeometry(shape) {
+      const outer = cleanSolverRing(shape?.polygonPoints);
+      if (outer.length < 3) return null;
+      const origin = outer.reduce((acc, point) => ({
+        x: Math.min(acc.x, point.x),
+        y: Math.min(acc.y, point.y),
+      }), { x: outer[0].x, y: outer[0].y });
+      return {
+        origin,
+        outer: normalizeSolverRing(outer, origin),
+        holes: (shape?.holes || [])
+          .map(hole => cleanSolverRing(hole?.points || []))
+          .filter(hole => hole.length >= 3)
+          .map(hole => normalizeSolverRing(hole, origin)),
+      };
+    }
 
     // Assembles the full JSON payload the Sparrow solver expects.
     // Iterates all files, sanitises polygon points, assigns integer IDs, and builds
@@ -114,8 +201,8 @@
       for (const file of state.files) {
         const shapes = (await ensureFileShapes(file)).filter(shape => shape.visible !== false);
         shapes.forEach(shape => {
-          const points = sanitizePolygonPoints(shape.polygonPoints);
-          if (points.length < 3) return;
+          const geometry = buildSolverShapeGeometry(shape);
+          if (!geometry?.outer?.length) return;
           const itemId = nextId++;
 
           items.push({
@@ -125,7 +212,7 @@
             allowed_orientations: [...allowedOrientations],
             shape: {
               type: 'simple_polygon',
-              data: points.map(point => [point.x, point.y]),
+              data: geometry.outer.map(point => [point.x, point.y]),
             },
           });
 
@@ -135,14 +222,9 @@
             source_shape_id: shape.id,
             part_label: partLabelFromName(file.name),
             layers: clonePlain(synthesizeEngravingLayer(file.layers || [], settings, file.id)),
-            entities: clonePlain(shape.exportEntities || []),
-            polygon: points.map(point => [point.x, point.y]),
-            holes: clonePlain(
-              (shape.holes || [])
-                .map(hole => sanitizePolygonPoints(hole?.points || []))
-                .filter(holePoints => holePoints.length >= 4)
-                .map(holePoints => holePoints.map(point => [point.x, point.y]))
-            ),
+            entities: clonePlain((shape.exportEntities || []).map(entity => normalizeExportEntity(entity, geometry.origin))),
+            polygon: geometry.outer.map(point => [point.x, point.y]),
+            holes: clonePlain(geometry.holes.map(hole => hole.map(point => [point.x, point.y]))),
           };
         });
       }

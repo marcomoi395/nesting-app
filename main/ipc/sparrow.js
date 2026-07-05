@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const { cleanupTempArtifacts } = require('../utils/temp-retention');
+const { compactLastStripArtifacts } = require('../utils/compact-last-strip');
 
 const activeSparrowProcesses = new Map();
 const sparrowRuns = new Map();
@@ -89,6 +90,73 @@ function readJsonIfExists(filePath) {
   if (!fs.existsSync(filePath)) return null;
   return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
 }
+function readPlacedItemCounts(jsonPath) {
+  let stripData = null;
+  try {
+    stripData = readJsonIfExists(jsonPath);
+  } catch {
+    return [];
+  }
+  const placedItems = Array.isArray(stripData?.solution?.layout?.placed_items)
+    ? stripData.solution.layout.placed_items
+    : [];
+  const counts = new Map();
+  placedItems.forEach(placement => {
+    const itemId = Number(placement?.item_id);
+    if (!Number.isFinite(itemId)) return;
+    counts.set(itemId, (counts.get(itemId) || 0) + 1);
+  });
+  return [...counts.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([item_id, count]) => ({ item_id, count }));
+}
+function rewriteTailIdMapping(runDir, safeName, inputPath) {
+  const inputJson = readJsonIfExists(inputPath);
+  const mapping = inputJson?._tailIdMapping;
+  if (!mapping || typeof mapping !== 'object') return;
+
+  const outputDir = path.join(runDir, 'output');
+  const rewrite = (jsonPath) => {
+    const data = readJsonIfExists(jsonPath);
+    if (!data) return;
+    let changed = false;
+    if (Array.isArray(data.items)) {
+      data.items.forEach(item => {
+        const original = mapping[String(item.id)];
+        if (original !== undefined) { item.id = original; changed = true; }
+      });
+    }
+    const placed = data.solution?.layout?.placed_items;
+    if (Array.isArray(placed)) {
+      placed.forEach(p => {
+        const original = mapping[String(p.item_id)];
+        if (original !== undefined) { p.item_id = original; changed = true; }
+      });
+    }
+    if (changed) fs.writeFileSync(jsonPath, JSON.stringify(data, null, 2), 'utf-8');
+  };
+
+  // Continuous final
+  const continuousJson = path.join(outputDir, `final_${safeName}.json`);
+  if (fs.existsSync(continuousJson)) rewrite(continuousJson);
+
+  // Multi-strip final
+  const finalDir = [
+    path.join(outputDir, `final_${safeName}`),
+    ...(!fs.existsSync(path.join(outputDir, `final_${safeName}`))
+      ? (fs.existsSync(outputDir)
+        ? fs.readdirSync(outputDir, { withFileTypes: true })
+            .filter(e => e.isDirectory() && e.name.startsWith('final_'))
+            .map(e => path.join(outputDir, e.name))
+        : [])
+      : []),
+  ].find(d => fs.existsSync(d));
+  if (finalDir && fs.statSync(finalDir).isDirectory()) {
+    fs.readdirSync(finalDir)
+      .filter(name => name.endsWith('.json') && name !== 'summary.json')
+      .forEach(name => rewrite(path.join(finalDir, name)));
+  }
+}
 
 function readLiveManifestIfExists(filePath) {
   if (!fs.existsSync(filePath)) return null;
@@ -173,23 +241,52 @@ function collectContinuousFinalArtifacts(outputDir, safeName) {
     ? solution.placed_items.length
     : countPlacedItemsInSvg(svgText);
 
+  const placedItemCounts = readPlacedItemCounts(finalJsonPath);
+  const summary = compactLastStripArtifacts({
+    name: finalJson?.name || safeName,
+    strip_count: 1,
+    density: Number.isFinite(density) ? density : null,
+    is_preview: false,
+    strips: [{
+      index: 1,
+      svg_path: finalSvgPath,
+      json_path: finalJsonPath,
+      svg: svgText,
+      strip_width: Number.isFinite(stripWidth) ? stripWidth : null,
+      density: Number.isFinite(density) ? density : null,
+      item_count: Number.isFinite(itemCount) ? itemCount : 0,
+      placed_item_counts: placedItemCounts,
+      placed_item_ids: placedItemCounts.map(item => item.item_id),
+      is_preview: false,
+    }],
+  });
+
   return {
     summaryPath: finalJsonPath,
+    summary,
+  };
+}
+function collectRootFinalSvgPreview(outputDir, safeName) {
+  if (!outputDir || !fs.existsSync(outputDir)) return null;
+
+  const finalSvgPath = path.join(outputDir, `final_${safeName}.svg`);
+  if (!fs.existsSync(finalSvgPath)) return null;
+
+  const svgText = fs.readFileSync(finalSvgPath, 'utf-8');
+  return {
+    summaryPath: finalSvgPath,
     summary: {
-      name: finalJson?.name || safeName,
+      name: safeName,
       strip_count: 1,
-      density: Number.isFinite(density) ? density : null,
-      is_preview: false,
       strips: [{
         index: 1,
         svg_path: finalSvgPath,
-        json_path: finalJsonPath,
+        json_path: null,
         svg: svgText,
-        strip_width: Number.isFinite(stripWidth) ? stripWidth : null,
-        density: Number.isFinite(density) ? density : null,
-        item_count: Number.isFinite(itemCount) ? itemCount : 0,
-        is_preview: false,
+        item_count: countPlacedItemsInSvg(svgText),
+        is_preview: true,
       }],
+      is_preview: true,
     },
   };
 }
@@ -309,22 +406,26 @@ function collectSparrowArtifacts(runDir, safeName) {
   const summary = readJsonIfExists(summaryPath);
 
   if (summary?.strips?.length) {
+    const mappedSummary = compactLastStripArtifacts({
+      ...summary,
+      strips: summary.strips.map(strip => {
+        const svgPath = path.resolve(runDir, strip.svg_path);
+        const jsonPath = path.resolve(runDir, strip.json_path);
+        const placedItemCounts = readPlacedItemCounts(jsonPath);
+        return {
+          ...strip,
+          svg_path: svgPath,
+          json_path: jsonPath,
+          svg: fs.existsSync(svgPath) ? fs.readFileSync(svgPath, 'utf-8') : '',
+          placed_item_counts: placedItemCounts,
+          placed_item_ids: placedItemCounts.map(item => item.item_id),
+          is_preview: false,
+        };
+      }),
+    });
     return {
       summaryPath,
-      summary: {
-        ...summary,
-        strips: summary.strips.map(strip => {
-          const svgPath = path.resolve(runDir, strip.svg_path);
-          const jsonPath = path.resolve(runDir, strip.json_path);
-          return {
-            ...strip,
-            svg_path: svgPath,
-            json_path: jsonPath,
-            svg: fs.existsSync(svgPath) ? fs.readFileSync(svgPath, 'utf-8') : '',
-            is_preview: false,
-          };
-        }),
-      },
+      summary: mappedSummary,
     };
   }
 
@@ -383,6 +484,12 @@ function collectRunningSparrowArtifacts(runDir, safeName) {
     // Ignore transient intermediate-preview read failures while Sparrow is
     // still writing files.
   }
+  try {
+    const rootPreview = collectRootFinalSvgPreview(path.join(runDir, 'output'), safeName);
+    if (rootPreview?.summary?.strips?.length) return rootPreview;
+  } catch {
+    // Ignore transient root-preview read failures while Sparrow is still writing files.
+  }
 
   try {
     const artifacts = collectSparrowArtifacts(runDir, safeName);
@@ -397,6 +504,34 @@ function collectRunningSparrowArtifacts(runDir, safeName) {
     summaryPath: null,
     summary: null,
   };
+}
+async function delay(ms) {
+  await new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function hasExportableFinalSummary(summary) {
+  const strips = Array.isArray(summary?.strips) ? summary.strips : [];
+  return !!(
+    strips.length
+    && !summary?.is_preview
+    && strips.every(strip => typeof strip?.json_path === 'string' && strip.json_path.trim() && fs.existsSync(strip.json_path))
+  );
+}
+
+async function awaitCompletedArtifacts(runDir, safeName, {
+  attempts = 15,
+  delayMs = 100,
+} = {}) {
+  let artifacts = collectSparrowArtifacts(runDir, safeName);
+  if (hasExportableFinalSummary(artifacts?.summary)) return artifacts;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await delay(delayMs);
+    artifacts = collectSparrowArtifacts(runDir, safeName);
+    if (hasExportableFinalSummary(artifacts?.summary)) return artifacts;
+  }
+
+  return artifacts;
 }
 
 function terminateSparrowRun(runId, { markStopped = true, forceAfterMs = 2000 } = {}) {
@@ -476,6 +611,8 @@ function registerSparrowIpc() {
       const safeName = String(payload?.name || 'nesting-job')
         .replace(/[^a-z0-9-_]+/gi, '-')
         .replace(/^-+|-+$/g, '') || 'nesting-job';
+
+      payload.name = safeName;
       const runsRootDir = path.join(app.getPath('temp'), 'nestkit-runs');
       cleanupTempArtifacts(runsRootDir);
       const runDir = path.join(runsRootDir, `${safeName}-${Date.now()}`);
@@ -491,9 +628,10 @@ function registerSparrowIpc() {
       if (Number.isFinite(options.rngSeed)) {
         args.push('--rng-seed', String(options.rngSeed));
       }
-      if (Number.isFinite(options.workers) && options.workers >= 1) {
-        args.push('--workers', String(Math.trunc(options.workers)));
-      }
+      // ponytail: Sparrow binary in this environment does not support --workers; restore when CLI adds it.
+      // if (Number.isFinite(options.workers) && options.workers >= 1) {
+      //   args.push('--workers', String(Math.trunc(options.workers)));
+      // }
       if (options.earlyTermination) {
         args.push('--early-termination');
       }
@@ -577,6 +715,13 @@ function registerSparrowIpc() {
           }
         }
         activeSparrowProcesses.delete(runId);
+        if (code === 0) {
+          try {
+            rewriteTailIdMapping(runDir, safeName, inputPath);
+          } catch (err) {
+            console.warn('[Sparrow] Tail ID rewrite failed:', err);
+          }
+        }
       });
 
       return {
@@ -612,7 +757,7 @@ function registerSparrowIpc() {
     const status = run.status;
     const artifacts = status === 'running'
       ? collectRunningSparrowArtifacts(run.runDir, run.safeName)
-      : collectSparrowArtifacts(run.runDir, run.safeName);
+      : await awaitCompletedArtifacts(run.runDir, run.safeName);
     const error = status === 'error'
       ? (run.stderr.trim() || run.stdout.trim() || run.error || 'Sparrow failed')
       : null;
@@ -635,4 +780,6 @@ function registerSparrowIpc() {
 
 module.exports = {
   registerSparrowIpc,
+  hasExportableFinalSummary,
+  awaitCompletedArtifacts,
 };

@@ -288,6 +288,7 @@ sheetModalApi = window.NestSheetModal.createSheetModal({
 const exportServiceApi = window.NestExportService.createExportService({
   state,
   dom,
+  getCurrentNestingSettings: currentNestingSettings,
 });
 
 // Nesting service — kicks off and monitors a solver run, polls for results, and
