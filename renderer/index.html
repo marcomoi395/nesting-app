@@ -226,6 +226,13 @@
           </label>
         </div>
         <div class="setting-row">
+          <label title="Write each sketch as its own DXF block and place it with INSERT records. Turn this off to flatten all geometry directly into model space.">Use blocks in DXF export</label>
+          <label class="toggle">
+            <input type="checkbox" data-setting-key="useBlocks" checked />
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+        <div class="setting-row">
           <label title="Best effort. Joins end-to-end LINE entities into larger polylines during DXF export to help CNC and laser software follow connected sketch linework more predictably. Does not bridge gaps or merge truly separate bodies.">Join connected linework</label>
           <label class="toggle">
             <input type="checkbox" data-setting-key="joinConnectedLinework" />

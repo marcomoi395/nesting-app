@@ -20,6 +20,7 @@ function registerExportDxfIpc() {
     outputDirBookmark,
     jobName,
     inputPath,
+    settings: currentSettings = null,
     exportItems = {},
     strips,
   }) => {
@@ -36,6 +37,9 @@ function registerExportDxfIpc() {
         } catch (e) {
           // Fall through — will export what it can.
         }
+      }
+      if (currentSettings && typeof currentSettings === 'object') {
+        Object.assign(exportSettings, normalizeSettings(currentSettings));
       }
 
       const RAD = Math.PI / 180;
@@ -441,6 +445,11 @@ function registerExportDxfIpc() {
       function labelForItem(item) {
         const sourceName = item?.export?.source_name || item?.dxf || '';
         return path.basename(String(sourceName)).replace(/\.dxf$/i, '');
+      }
+
+      function blockNameForItem(item, itemId) {
+        const label = labelForItem(item);
+        return sanitizeDxfName(`PART_${itemId}_${label}`, `PART_${itemId || 0}`);
       }
 
       function bboxFromPolygon(points) {
@@ -948,7 +957,7 @@ function registerExportDxfIpc() {
         return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
       }
 
-      function buildDXF(sheetEntities, engravings, layerDefs, emitDebug) {
+      function buildDXF(sheetEntities, engravings, layerDefs, emitDebug, sketchPlacements = []) {
         const dxf = new DxfWriter();
         dxf.setUnits(Units.Millimeters);
 
@@ -974,7 +983,24 @@ function registerExportDxfIpc() {
           }
         });
 
-        sheetEntities.forEach(entity => addDxfEntity(dxf, entity.entity, entity.rotation, entity.tx, entity.ty, emitDebug));
+        if (exportSettings.useBlocks !== false) {
+          const definedBlocks = new Set();
+          sketchPlacements.forEach(placement => {
+            if (!placement?.blockName || definedBlocks.has(placement.blockName)) return;
+            const block = dxf.addBlock(placement.blockName);
+            placement.entities.forEach(entity => addDxfEntity(block, entity, 0, 0, 0, emitDebug));
+            definedBlocks.add(placement.blockName);
+          });
+
+          sketchPlacements.forEach(placement => {
+            dxf.modelSpace.addInsert(placement.blockName, point3d(placement.tx, placement.ty, 0), {
+              rotationAngle: placement.rotation,
+            });
+          });
+        } else {
+          sheetEntities.forEach(entity => addDxfEntity(dxf, entity.entity, entity.rotation, entity.tx, entity.ty, emitDebug));
+        }
+
         engravings.forEach(engraving => {
           if (engraving.engravingLayer && engraving.placedPolygon?.length) {
             const labelEntities = buildStrokeLabelEntities(
@@ -1007,6 +1033,7 @@ function registerExportDxfIpc() {
 
         const placedItems = stripData.solution?.layout?.placed_items || [];
         const sheetEntities = [];
+        const sketchPlacements = [];
         const engravings = [];
         const debugRows = [];
         const emitDebug = { emitted: {}, skipped: [] };
@@ -1043,6 +1070,7 @@ function registerExportDxfIpc() {
             ? joinConnectedLineworkEntities(rawEntities)
             : rawEntities;
           let usedFallback = false;
+          let blockEntities = entities;
           if (entities.length) {
             entities.forEach(entity => {
               sheetEntities.push({
@@ -1054,11 +1082,16 @@ function registerExportDxfIpc() {
             });
           } else {
             usedFallback = true;
+            const fallbackEntity = {
+              type: 'LWPOLYLINE',
+              layer: '0',
+              closed: true,
+              vertices: sourcePolygon.map(([x, y]) => ({ x, y, z: 0 })),
+            };
+            blockEntities = [fallbackEntity];
             sheetEntities.push({
               entity: {
-                type: 'LWPOLYLINE',
-                layer: '0',
-                closed: true,
+                ...fallbackEntity,
                 vertices: pts.map(([x, y]) => ({ x, y, z: 0 })),
               },
               rotation: 0,
@@ -1066,6 +1099,14 @@ function registerExportDxfIpc() {
               ty: 0,
             });
           }
+
+          sketchPlacements.push({
+            blockName: blockNameForItem(item, placement.item_id),
+            entities: blockEntities,
+            rotation,
+            tx,
+            ty,
+          });
 
           debugRows.push({
             item_id: placement.item_id,
@@ -1081,13 +1122,14 @@ function registerExportDxfIpc() {
             used_fallback_polygon: usedFallback,
             engraving_layer: getEngravingLayer(item)?.name || null,
             label: labelForItem(item),
+            block_name: blockNameForItem(item, placement.item_id),
             rotation,
             translation: [tx, ty],
           });
         });
 
         const layerDefs = collectLayerDefs([{ placedItems }]);
-        const dxf = buildDXF(sheetEntities, engravings, layerDefs, emitDebug);
+        const dxf = buildDXF(sheetEntities, engravings, layerDefs, emitDebug, sketchPlacements);
         const fileBase = exportSheetFileBase(strip, exportIndex);
         const outPath = path.join(outputDir, `${fileBase}.dxf`);
         const debugPath = path.join(outputDir, `${fileBase}.debug.json`);

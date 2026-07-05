@@ -1,7 +1,7 @@
 'use strict';
 
 (function defineExportService(globalScope) {
-  function createExportService({ state, dom }) {
+  function createExportService({ state, dom, getCurrentNestingSettings }) {
     const { formatWidthMeters } = globalScope.NestHelpers;
     let exportFolderPath = null;
     let exportFolderBookmark = null;
@@ -242,6 +242,7 @@
             outputDirBookmark: exportFolderBookmark || null,
             jobName: state.nestResult.name || 'nesting-job',
             inputPath: state.nestInputPath || null,
+            settings: typeof getCurrentNestingSettings === 'function' ? getCurrentNestingSettings() : {},
             exportItems: state.lastPlacementExportItems || {},
             strips,
           });

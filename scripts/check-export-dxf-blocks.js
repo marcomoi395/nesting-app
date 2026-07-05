@@ -51,7 +51,7 @@ async function main() {
 
   fs.mkdirSync(outputDir, { recursive: true });
   fs.writeFileSync(inputPath, JSON.stringify({
-    settings: {},
+    settings: { useBlocks: true },
     items: [
       {
         id: 1,
@@ -102,19 +102,100 @@ async function main() {
   const text = fs.readFileSync(outPath, 'utf8');
 
   assert.match(text, /0\r\nSECTION\r\n2\r\nBLOCKS\r\n/, 'missing BLOCKS section');
-  assert.equal((text.match(/0\r\nBLOCK\r\n/g) || []).length, 2, 'expected model and paper space BLOCK definitions');
-  assert.equal((text.match(/0\r\nINSERT\r\n/g) || []).length, 0, 'did not expect INSERT records in current export');
+  assert.equal((text.match(/0\r\nBLOCK\r\n/g) || []).length, 3, 'expected model space, paper space, and sketch BLOCK definitions');
+  assert.equal((text.match(/0\r\nINSERT\r\n/g) || []).length, 2, 'expected one INSERT per placement');
   assert.match(text, /2\r\n\*Model_Space\r\n/, 'expected *Model_Space block name');
   assert.match(text, /2\r\n\*Paper_Space\r\n/, 'expected *Paper_Space block name');
+  assert.match(text, /2\r\nPART_1_sample\r\n/, 'expected sketch block name');
 
   const entitiesStart = text.indexOf('0\r\nSECTION\r\n2\r\nENTITIES\r\n');
   assert.ok(entitiesStart >= 0, 'missing ENTITIES section');
   const entitiesSection = text.slice(entitiesStart);
-  assert.equal((entitiesSection.match(/0\r\nLINE\r\n/g) || []).length, 2, 'expected two transformed LINE records in ENTITIES');
-  assert.match(entitiesSection, /10\r\n20\r\n20\r\n5\r\n30\r\n0\r\n11\r\n20\r\n21\r\n15\r\n31\r\n0\r\n/, 'expected second placement transformed into rotated vertical line');
+  assert.equal((entitiesSection.match(/0\r\nLINE\r\n/g) || []).length, 0, 'did not expect flat LINE records in ENTITIES');
+  assert.equal((entitiesSection.match(/0\r\nINSERT\r\n/g) || []).length, 2, 'expected two INSERT records in ENTITIES');
+  assert.match(entitiesSection, /2\r\nPART_1_sample\r\n/, 'expected inserts to target sketch block');
+  assert.match(entitiesSection, /50\r\n90\r\n/, 'expected second placement rotated at 90 degrees');
 
   assert.ok(text.includes('\r\n'), 'DXF should use CRLF newlines');
   assert.ok(text.endsWith('\r\n'), 'DXF should end with trailing newline');
+
+  const flatInputPath = path.join(tempRoot, 'input-flat.json');
+  fs.writeFileSync(flatInputPath, JSON.stringify({
+    settings: { useBlocks: false },
+    items: [
+      {
+        id: 1,
+        dxf: 'sample.dxf',
+        shape: { data: [[0, 0], [10, 0], [10, 10], [0, 10]] },
+      },
+    ],
+  }));
+  const flatResult = await handler({}, {
+    outputDir,
+    outputDirBookmark: null,
+    jobName: 'job-flat',
+    inputPath: flatInputPath,
+    exportItems: {
+      1: {
+        source_name: 'sample.dxf',
+        part_label: 'sample',
+        layers: [{ name: 'CUT', color: '#ffffff' }],
+        entities: [
+          {
+            type: 'LINE',
+            layer: 'CUT',
+            start: { x: 0, y: 0, z: 0 },
+            end: { x: 10, y: 0, z: 0 },
+          },
+        ],
+        polygon: [[0, 0], [10, 0], [10, 10], [0, 10]],
+      },
+    },
+    strips: [
+      { index: 1, json_path: stripPath, strip_width: 10, strip_height: 10, sheet_width: 10 },
+    ],
+  });
+  assert.equal(flatResult?.success, true, 'flat mock export should succeed');
+  const flatText = fs.readFileSync(outPath, 'utf8');
+  const flatEntitiesStart = flatText.indexOf('0\r\nSECTION\r\n2\r\nENTITIES\r\n');
+  assert.ok(flatEntitiesStart >= 0, 'missing ENTITIES section for flat export');
+  const flatEntitiesSection = flatText.slice(flatEntitiesStart);
+  assert.equal((flatText.match(/0\r\nINSERT\r\n/g) || []).length, 0, 'did not expect INSERT records when useBlocks is disabled');
+  assert.equal((flatEntitiesSection.match(/0\r\nLINE\r\n/g) || []).length, 2, 'expected two flat LINE records when useBlocks is disabled');
+
+  const overrideResult = await handler({}, {
+    outputDir,
+    outputDirBookmark: null,
+    jobName: 'job-override',
+    inputPath: flatInputPath,
+    settings: { useBlocks: true },
+    exportItems: {
+      1: {
+        source_name: 'sample.dxf',
+        part_label: 'sample',
+        layers: [{ name: 'CUT', color: '#ffffff' }],
+        entities: [
+          {
+            type: 'LINE',
+            layer: 'CUT',
+            start: { x: 0, y: 0, z: 0 },
+            end: { x: 10, y: 0, z: 0 },
+          },
+        ],
+        polygon: [[0, 0], [10, 0], [10, 10], [0, 10]],
+      },
+    },
+    strips: [
+      { index: 1, json_path: stripPath, strip_width: 10, strip_height: 10, sheet_width: 10 },
+    ],
+  });
+  assert.equal(overrideResult?.success, true, 'override mock export should succeed');
+  const overrideText = fs.readFileSync(outPath, 'utf8');
+  const overrideEntitiesStart = overrideText.indexOf('0\r\nSECTION\r\n2\r\nENTITIES\r\n');
+  assert.ok(overrideEntitiesStart >= 0, 'missing ENTITIES section for override export');
+  const overrideEntitiesSection = overrideText.slice(overrideEntitiesStart);
+  assert.equal((overrideText.match(/0\r\nINSERT\r\n/g) || []).length, 2, 'expected explicit current settings to override stale input settings');
+  assert.equal((overrideEntitiesSection.match(/0\r\nLINE\r\n/g) || []).length, 0, 'did not expect flat LINE records after explicit override');
 
   console.log('DXF block export check passed:', outPath);
 }
