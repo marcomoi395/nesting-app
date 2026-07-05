@@ -266,6 +266,30 @@ function collectContinuousFinalArtifacts(outputDir, safeName) {
     summary,
   };
 }
+function collectRootFinalSvgPreview(outputDir, safeName) {
+  if (!outputDir || !fs.existsSync(outputDir)) return null;
+
+  const finalSvgPath = path.join(outputDir, `final_${safeName}.svg`);
+  if (!fs.existsSync(finalSvgPath)) return null;
+
+  const svgText = fs.readFileSync(finalSvgPath, 'utf-8');
+  return {
+    summaryPath: finalSvgPath,
+    summary: {
+      name: safeName,
+      strip_count: 1,
+      strips: [{
+        index: 1,
+        svg_path: finalSvgPath,
+        json_path: null,
+        svg: svgText,
+        item_count: countPlacedItemsInSvg(svgText),
+        is_preview: true,
+      }],
+      is_preview: true,
+    },
+  };
+}
 
 function collectLiveArtifacts(runDir, safeName) {
   const liveDir = path.join(runDir, 'data', 'live');
@@ -459,6 +483,12 @@ function collectRunningSparrowArtifacts(runDir, safeName) {
   } catch {
     // Ignore transient intermediate-preview read failures while Sparrow is
     // still writing files.
+  }
+  try {
+    const rootPreview = collectRootFinalSvgPreview(path.join(runDir, 'output'), safeName);
+    if (rootPreview?.summary?.strips?.length) return rootPreview;
+  } catch {
+    // Ignore transient root-preview read failures while Sparrow is still writing files.
   }
 
   try {

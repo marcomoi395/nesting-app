@@ -433,7 +433,7 @@
               dom.stopBtn.disabled = true;
               dom.stopBtn.classList.remove('active');
             }
-          }, 500);
+          }, 150);
         } catch (err) {
           if (sparrowRunAborted) return;
           console.error('[Sparrow] Run failed:', err?.sparrowDetails || err);
