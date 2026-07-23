@@ -24,40 +24,98 @@ const {
   isNestSummaryBetter,
 } = context.NestResultScoring;
 
-function summaryFromTailDensities(densities) {
-  return {
-    strips: densities.map((density, index) => ({
-      density,
-      strip_width: 1000,
-      strip_height: 1000,
-      item_count: index + 1,
-    })),
-  };
+function makeSummary(strips) {
+  return { strips };
 }
 
-const eightStrip = summaryFromTailDensities([0.55, 0.55, 0.55, 0.55, 0.55, 0.55, 0.2, 0.2]);
-const nineStrip = summaryFromTailDensities([0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.95, 0.95, 0.95]);
+// Priority 1: totalItemCount beats all
+const moreItems = makeSummary([
+  { density: 0.5, strip_width: 1000, strip_height: 1000, item_count: 4 },
+  { density: 0.5, strip_width: 1000, strip_height: 1000, item_count: 2 }
+]);
+const fewerItems = makeSummary([
+  { density: 0.9, strip_width: 500, strip_height: 1000, item_count: 3 }
+]);
 assert.equal(
-  isNestSummaryBetter(scoreNestSummary(eightStrip), scoreNestSummary(nineStrip)),
+  isNestSummaryBetter(scoreNestSummary(moreItems), scoreNestSummary(fewerItems)),
   true,
-  'fewer strips should still win first'
+  'higher totalItemCount should win (no dropped parts)'
 );
 
-const weakerBodySameLast = summaryFromTailDensities([0.6, 0.6, 0.6, 0.5, 0.5, 0.5]);
-const strongerBodySameLast = summaryFromTailDensities([0.6, 0.6, 0.6, 0.5, 0.7, 0.5]);
+// Priority 2: stripCount is second (with equal totalItemCount)
+const oneStrip = makeSummary([
+  { density: 0.5, strip_width: 2000, strip_height: 1000, item_count: 5 }
+]);
+const twoStrips = makeSummary([
+  { density: 0.9, strip_width: 1000, strip_height: 1000, item_count: 3 },
+  { density: 0.9, strip_width: 1000, strip_height: 1000, item_count: 2 }
+]);
 assert.equal(
-  isNestSummaryBetter(scoreNestSummary(strongerBodySameLast), scoreNestSummary(weakerBodySameLast)),
+  isNestSummaryBetter(scoreNestSummary(oneStrip), scoreNestSummary(twoStrips)),
   true,
-  'higher body density should win when strip count matches'
+  'fewer strips should win when totalItemCount is equal'
 );
 
-const sameBodyWeakerLast = summaryFromTailDensities([0.4, 0.4, 0.4, 0.5, 0.5, 0.6]);
-const sameBodyStrongerLast = summaryFromTailDensities([0.4, 0.4, 0.4, 0.5, 0.5, 0.95]);
+// Priority 3: lastStripWidth is third (with equal totalItemCount and stripCount)
+const narrowerTail = makeSummary([
+  { density: 0.7, strip_width: 1000, strip_height: 1000, item_count: 3 },
+  { density: 0.7, strip_width: 800, strip_height: 1000, item_count: 2 }
+]);
+const widerTail = makeSummary([
+  { density: 0.9, strip_width: 1000, strip_height: 1000, item_count: 3 },
+  { density: 0.9, strip_width: 1200, strip_height: 1000, item_count: 2 }
+]);
 assert.equal(
-  isNestSummaryBetter(scoreNestSummary(sameBodyStrongerLast), scoreNestSummary(sameBodyWeakerLast)),
+  isNestSummaryBetter(scoreNestSummary(narrowerTail), scoreNestSummary(widerTail)),
+  true,
+  'smaller lastStripWidth should win when totalItemCount and stripCount are equal'
+);
+
+// Priority 4: bodyScore is fourth (sum of squared densities of body sheets)
+const greedyBody = makeSummary([
+  { density: 0.95, strip_width: 1000, strip_height: 1000, item_count: 2 },
+  { density: 0.95, strip_width: 1000, strip_height: 1000, item_count: 2 },
+  { density: 0.5, strip_width: 1000, strip_height: 1000, item_count: 1 }
+]);
+const weakBody = makeSummary([
+  { density: 0.7, strip_width: 1000, strip_height: 1000, item_count: 2 },
+  { density: 0.7, strip_width: 1000, strip_height: 1000, item_count: 2 },
+  { density: 0.5, strip_width: 1000, strip_height: 1000, item_count: 1 }
+]);
+assert.equal(
+  isNestSummaryBetter(scoreNestSummary(greedyBody), scoreNestSummary(weakBody)),
+  true,
+  'higher bodyScore (squared body densities) should win when totalItemCount, stripCount, lastStripWidth are equal'
+);
+
+// Priority 5: lastDensity is final tie-breaker
+const betterLast = makeSummary([
+  { density: 0.8, strip_width: 1000, strip_height: 1000, item_count: 3 },
+  { density: 0.9, strip_width: 1000, strip_height: 1000, item_count: 2 }
+]);
+const worseLast = makeSummary([
+  { density: 0.8, strip_width: 1000, strip_height: 1000, item_count: 3 },
+  { density: 0.6, strip_width: 1000, strip_height: 1000, item_count: 2 }
+]);
+assert.equal(
+  isNestSummaryBetter(scoreNestSummary(betterLast), scoreNestSummary(worseLast)),
+  true,
+  'higher lastDensity should win when all other metrics are equal'
+);
+
+// Tie: identical scores should not replace current
+const identical1 = makeSummary([
+  { density: 0.8, strip_width: 1000, strip_height: 1000, item_count: 3 }
+]);
+const identical2 = makeSummary([
+  { density: 0.8, strip_width: 1000, strip_height: 1000, item_count: 3 }
+]);
+assert.equal(
+  isNestSummaryBetter(scoreNestSummary(identical2), scoreNestSummary(identical1)),
   false,
-  'phase 1 scoring should ignore last sheet quality when earlier sheets tie'
+  'identical scores should return false (keep current)'
 );
+
 
 assert.equal(
   effectiveStripDensity(

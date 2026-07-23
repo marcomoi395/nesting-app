@@ -151,12 +151,14 @@
           const completed = await waitForSparrowCompletion(result.runId);
           if (completed.status === 'stopped') return null;
           if (completed.summary?.strips?.length) {
-            const score = scoreNestSummary(completed.summary, state.sheets[0] || {});
+            const finalSummary = await runTailRefinement(completed.summary, payload, baseOptions, settings);
+            if (finalSummary === null) return null;
+            const score = scoreNestSummary(finalSummary, state.sheets[0] || {});
             if (!best || isNestSummaryBetter(score, best.score)) {
               best = {
                 seed,
                 score,
-                summary: completed.summary,
+                summary: finalSummary,
                 inputPath: completed.inputPath || result.inputPath || null,
               };
             }
@@ -398,9 +400,6 @@
           if (runCount > 1) {
             const best = await runQualitySeedSequence(exported.payload, sparrowOptions, settings);
             if (best === null) return;
-            const refinedSummary = await runTailRefinement(best.summary, exported.payload, sparrowOptions, settings);
-            if (refinedSummary === null) return;
-            best.summary = refinedSummary;
             state.nestResult = best.summary;
             state.nestInputPath = best.inputPath;
             state.activeStripIndex = Math.min(state.activeStripIndex || 0, Math.max(0, (best.summary.strips?.length || 1) - 1));
