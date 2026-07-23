@@ -83,7 +83,7 @@
     }
 
     function tailRefinementSeeds(settings) {
-      return qualityRunSeeds(settings, qualityRunCount(settings));
+      return qualityRunSeeds(settings, 1);
     }
 
     function tailRefinementOptions(baseOptions, settings) {
