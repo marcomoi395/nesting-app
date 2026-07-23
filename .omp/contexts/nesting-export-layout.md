@@ -35,7 +35,6 @@ The sampled hash collision hid real frame changes, so the renderer skipped updat
 ## Evidence
 
 - `agent-derived`: Bug analysis during export DXF unlimited mode issue. `main/ipc/sparrow.js` relies on hardcoded path lookup for continuous mode artifacts. `run-sparrow` IPC modified to sync `payload.name` to `safeName`.
-- `test-verified`: `scripts/check-sparrow-running-preview.js`, `scripts/check-sparrow-poll.js`, and `scripts/check-svg-preview-signature.js` passed after fix.
 - `code-verified`: `renderer/views/canvas-view.js` now uses exact SVG string equality for same-sheet dedupe.
 
 ## Use When

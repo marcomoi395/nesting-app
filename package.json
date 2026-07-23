@@ -7,22 +7,15 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "preflight:mac-helpers": "node scripts/verify-mac-helpers.js",
-    "preflight:linux-helpers": "node scripts/verify-linux-helpers.js",
-    "preflight:win-helpers": "node scripts/verify-win-helpers.js",
-    "preflight:appx-host": "node scripts/verify-appx-host.js",
-    "appx:upload": "node scripts/make-appxupload.js",
-    "install:appx-test": "powershell -ExecutionPolicy Bypass -File scripts/install-appx-test-package.ps1",
-    "verify:mas-signing": "node scripts/verify-mas-signing.js",
-    "dist:mac": "npm run preflight:mac-helpers && electron-builder --mac dmg zip",
-    "dist:mas-app": "npm run preflight:mac-helpers && electron-builder --mac mas --dir",
-    "dist:mas": "npm run preflight:mac-helpers && electron-builder --mac mas",
-    "dist:mas-dev-app": "npm run preflight:mac-helpers && electron-builder --mac mas-dev --dir",
-    "dist:mas-dev": "npm run preflight:mac-helpers && electron-builder --mac mas-dev",
-    "dist:snap": "npm run preflight:linux-helpers && electron-builder --linux snap",
-    "dist:win": "npm run preflight:win-helpers && electron-builder --win nsis",
-    "dist:win-portable": "npm run preflight:win-helpers && electron-builder --win portable",
-    "dist:appx": "npm run preflight:win-helpers && npm run preflight:appx-host && electron-builder --win appx --x64 && npm run appx:upload"
+    "dist:mac": "electron-builder --mac dmg zip",
+    "dist:mas-app": "electron-builder --mac mas --dir",
+    "dist:mas": "electron-builder --mac mas",
+    "dist:mas-dev-app": "electron-builder --mac mas-dev --dir",
+    "dist:mas-dev": "electron-builder --mac mas-dev",
+    "dist:snap": "electron-builder --linux snap",
+    "dist:win": "electron-builder --win nsis",
+    "dist:win-portable": "electron-builder --win portable",
+    "dist:appx": "electron-builder --win appx --x64"
   },
   "devDependencies": {
     "electron": "^42.4.0",
@@ -34,13 +27,11 @@
     "concaveman": "^2.0.0",
     "dxf-parser": "^1.1.2",
     "jsts": "^2.12.1",
-    "makerjs": "^0.18.2",
     "planar-face-discovery": "^2.0.7",
     "to-planar-graph": "^3.0.1"
   },
   "build": {
     "appId": "com.kenzap.nesting",
-    "appxManifestCreated": "scripts/patch-appx-manifest.js",
     "productName": "Kenzap Nesting",
     "files": [
       "main.js",
