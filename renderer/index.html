@@ -171,6 +171,13 @@
             <span class="unit">seeds</span>
           </div>
         </div>
+        <div class="setting-row">
+          <label title="Number of seeds to test for each tail refinement candidate. Higher values improve tail optimization at the cost of longer run time.">Tail runs</label>
+          <div class="input-with-unit">
+            <input type="number" value="1" min="1" max="5" step="1" data-setting-key="tailRuns" />
+            <span class="unit">seeds</span>
+          </div>
+        </div>
         <div class="setting-row" data-dev-only-setting="rngSeed" hidden style="display: none;">
           <label>Random seed</label>
           <div class="input-with-unit">
