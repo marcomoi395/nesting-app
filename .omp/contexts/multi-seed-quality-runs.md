@@ -2,9 +2,9 @@
 
 ## Summary
 
-- `Quality runs` is visible in Algorithm settings and defaults to `1`, so normal behavior stays single-run until user opts in.
+- `Quality runs` is visible in Algorithm settings and defaults to `1`, so normal behavior stays single-run until user opts in. `Tail runs` controls tail refinement seed count per candidate (defaults to `1`, range 1-5).
 - Multi-seed mode runs Sparrow sequentially with deterministic seeds derived from `rngSeed`: `[base, base + 101, base + 1009, base + 10007, base + 100003]`, capped to 5 runs.
-- Multi-seed mode runs each quality seed sequentially, completes full Sparrow solve plus per-seed `last-only` tail refinement (1 seed per candidate), then compares final summaries using unified scoring.
+- Multi-seed mode runs each quality seed sequentially, completes full Sparrow solve plus per-seed `last-only` tail refinement (seed count controlled by `Tail runs` setting), then compares final summaries using unified scoring.
 - Final quality-run selection uses `renderer/utils/nest-result-scoring.js` with priority: `totalItemCount` (no dropped parts), `stripCount` (fewer sheets), `lastStripWidth` (smaller tail = more reusable), `bodyScore` (sum of squared body densities for greedy packing), `lastDensity` (tie-breaker).
 - Tail subset runs preserve original item ids, so export and canvas code stay unchanged when refined strips replace tail sheets.
 
@@ -12,7 +12,7 @@
 
 - Completed strip summaries now carry `placed_item_counts` and `placed_item_ids` from final strip JSON in `main/ipc/sparrow.js`; live preview strips still omit them.
 - Tail helper lives in `renderer/utils/tail-refinement.js` and exports `NestTailRefinement` with candidate generation, payload slicing, merge, scoring, and comparison helpers.
-- Candidate search is now bounded to final sheet only (`last-only`) and 1 seed per candidate (independent of quality-run count), reducing tail overhead while preserving tail optimization benefit.
+- Candidate search is now bounded to final sheet only (`last-only`) and uses `Tail runs` setting (defaults to 1, range 1-5) to control seed count per candidate, allowing users to trade tail optimization quality for run time.
 - Each seed completes both full solve and tail refinement before comparison; `renderer/utils/nest-result-scoring.js` scores the final merged summary (body + tail) with unified priority order.
 - `renderer/utils/tail-refinement.js` remains per-seed local search for the final sheet only; it uses separate `scoreTailRefinementSummary()` and `isTailRefinementBetter()` to optimize within one seed's tail candidates, then returns the best refined summary for that seed.
 - Tail refinement failure is non-fatal once full solve succeeded: failed candidates log warnings, and final result falls back to best full-run summary.
@@ -42,4 +42,4 @@
 
 ## Last Updated
 
-- 2026-07-23 (reduced tail seed count to 1 per candidate)
+- 2026-07-23 (added configurable Tail runs setting)
