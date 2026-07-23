@@ -61,6 +61,7 @@
     timeLimit: 60,
     rngSeed: 42,
     multiSeedQualityRuns: 1,
+    tailRuns: 1,
     workers: 3,
     exportFormat: 'dxf',
     exportDebug: false,
@@ -172,8 +173,8 @@
       normalized.rotationStep = String(normalized.rotationStep);
     }
 
-    normalized.timeLimit = Math.max(10, Number(normalized.timeLimit) || SETTINGS_DEFAULTS.timeLimit);
     normalized.multiSeedQualityRuns = Math.max(1, Math.min(5, Math.trunc(Number(normalized.multiSeedQualityRuns) || 1)));
+    normalized.tailRuns = Math.max(1, Math.min(5, Math.trunc(Number(normalized.tailRuns) || 1)));
     normalized.rngSeed = Math.max(0, Math.trunc(Number(normalized.rngSeed) || SETTINGS_DEFAULTS.rngSeed));
     normalized.workers = Math.max(1, Math.trunc(Number(normalized.workers) || SETTINGS_DEFAULTS.workers));
     normalized.partSpacing = Math.max(0, Number(normalized.partSpacing) || 0);

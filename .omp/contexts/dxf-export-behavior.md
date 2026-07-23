@@ -6,7 +6,6 @@
 - Export supports two modes controlled by setting `useBlocks`: `true` writes one sketch block per part plus `INSERT` placements; `false` flattens transformed geometry directly into model space.
 - Export-time settings must prefer explicit current UI settings passed from `renderer/services/export-service.js` over stale settings stored in prior `state.nestInputPath` placement JSON.
 - Sketch block names are derived from `PART_<item_id>_<label>` and sanitized through `sanitizeDxfName()`.
-- Focused regression coverage lives in `scripts/check-export-dxf-clean.js`, `scripts/check-export-dxf-blocks.js`, and `scripts/check-export-dxf-autocad-graph.js`.
 
 ## Details
 
@@ -22,7 +21,6 @@ The renderer stores run inputs in `state.nestInputPath`, and earlier export logi
 
 - When adding any future DXF export toggle, pass current settings through `window.electronAPI.exportSheetsDXF(...)` and merge them after `inputPath` settings inside `main/ipc/export-dxf.js`.
 - Treat `inputPath` settings as run-time defaults only; treat explicit IPC `settings` as authoritative export-time overrides.
-- Preserve dual-path regression coverage in `scripts/check-export-dxf-blocks.js`: block mode on, block mode off, and explicit current-settings override over stale `inputPath` settings.
 
 ### Export structure
 
@@ -40,8 +38,6 @@ The renderer stores run inputs in `state.nestInputPath`, and earlier export logi
 - `code-verified`: `main/ipc/export-dxf.js:446-447` derives block labels from source filenames before sanitization.
 - `code-verified`: `shared/settings.js:65-69` defines `useBlocks: true` as default; `renderer/index.html:228-241` exposes the toggle in Settings.
 - `code-verified`: `renderer/services/export-service.js:240-247` sends current settings in the export IPC payload; `renderer/renderer.js:288-292` wires `currentNestingSettings` into export service.
-- `test-verified`: `scripts/check-export-dxf-blocks.js:53-62,100-198` verifies block mode, flat mode, and explicit override of stale `inputPath` settings.
-- `test-verified`: `node scripts/check-export-dxf-clean.js`, `node scripts/check-export-dxf-blocks.js`, and `node scripts/check-export-dxf-autocad-graph.js` all passed after the migration and stale-state fix.
 
 ## Use When
 

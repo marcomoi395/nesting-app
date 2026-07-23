@@ -25,45 +25,65 @@
     const strips = Array.isArray(summary?.strips) ? summary.strips : [];
     if (!strips.length) {
       return {
-        stripCount: Infinity,
-        minBodyDensity: 0,
-        avgBodyDensity: 0,
-        avgDensityExcludingLast: 0,
         totalItemCount: 0,
+        stripCount: Infinity,
+        lastStripWidth: Infinity,
+        lastDensity: 0,
+        bodyScore: 0,
       };
     }
 
-    const densities = strips.map(strip => effectiveStripDensity(strip, sheet));
-    const bodyDensities = strips.length > 1 ? densities.slice(0, -1) : [];
-    const avgDensityExcludingLast = bodyDensities.length
-      ? bodyDensities.reduce((sum, density) => sum + density, 0) / bodyDensities.length
-      : 0;
-    const avgBodyDensity = avgDensityExcludingLast;
-    const minBodyDensity = bodyDensities.length ? Math.min(...bodyDensities) : 0;
     const totalItemCount = strips.reduce((sum, strip) => sum + (Number(strip?.item_count) || 0), 0);
+    const stripCount = strips.length;
+    const lastStrip = strips[strips.length - 1];
+    const lastStripWidth = Number(lastStrip?.strip_width) || Infinity;
+    const lastDensity = effectiveStripDensity(lastStrip, sheet);
+
+    // Body score: sum of squared densities for all strips except the last
+    let bodyScore = 0;
+    if (strips.length > 1) {
+      const bodyStrips = strips.slice(0, -1);
+      bodyScore = bodyStrips.reduce((sum, strip) => {
+        const density = effectiveStripDensity(strip, sheet);
+        return sum + Math.pow(density, 2);
+      }, 0);
+    }
 
     return {
-      stripCount: strips.length,
-      minBodyDensity,
-      avgBodyDensity,
-      avgDensityExcludingLast,
       totalItemCount,
+      stripCount,
+      lastStripWidth,
+      lastDensity,
+      bodyScore,
     };
   }
 
   function isNestSummaryBetter(candidateScore, currentScore) {
     if (!currentScore) return true;
-    const tolerance = 1e-9;
-    if ((candidateScore?.stripCount ?? Infinity) !== (currentScore?.stripCount ?? Infinity)) {
-      return (candidateScore?.stripCount ?? Infinity) < (currentScore?.stripCount ?? Infinity);
-    }
-    if (((candidateScore?.minBodyDensity ?? 0) - (currentScore?.minBodyDensity ?? 0)) > tolerance) return true;
-    if (((currentScore?.minBodyDensity ?? 0) - (candidateScore?.minBodyDensity ?? 0)) > tolerance) return false;
-    if (((candidateScore?.avgBodyDensity ?? 0) - (currentScore?.avgBodyDensity ?? 0)) > tolerance) return true;
-    if (((currentScore?.avgBodyDensity ?? 0) - (candidateScore?.avgBodyDensity ?? 0)) > tolerance) return false;
-    if (((candidateScore?.avgDensityExcludingLast ?? 0) - (currentScore?.avgDensityExcludingLast ?? 0)) > tolerance) return true;
-    if (((currentScore?.avgDensityExcludingLast ?? 0) - (candidateScore?.avgDensityExcludingLast ?? 0)) > tolerance) return false;
-    return (candidateScore?.totalItemCount ?? 0) > (currentScore?.totalItemCount ?? 0);
+
+    const EPSILON = 0.0001;
+
+    // Priority 1: totalItemCount (higher is better - no dropped parts)
+    if (candidateScore.totalItemCount > currentScore.totalItemCount) return true;
+    if (candidateScore.totalItemCount < currentScore.totalItemCount) return false;
+
+    // Priority 2: stripCount (lower is better - fewer sheets)
+    if (candidateScore.stripCount < currentScore.stripCount) return true;
+    if (candidateScore.stripCount > currentScore.stripCount) return false;
+
+    // Priority 3: lastStripWidth (lower is better - more reusable tail)
+    if (currentScore.lastStripWidth - candidateScore.lastStripWidth > EPSILON) return true;
+    if (candidateScore.lastStripWidth - currentScore.lastStripWidth > EPSILON) return false;
+
+    // Priority 4: bodyScore (higher is better - greedy body packing)
+    if (candidateScore.bodyScore - currentScore.bodyScore > EPSILON) return true;
+    if (currentScore.bodyScore - candidateScore.bodyScore > EPSILON) return false;
+
+    // Priority 5: lastDensity (higher is better - tie-breaker)
+    if (candidateScore.lastDensity - currentScore.lastDensity > EPSILON) return true;
+
+    // Tie: keep current
+    return false;
   }
 
   globalScope.NestResultScoring = {

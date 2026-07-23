@@ -127,21 +127,29 @@
   function isTailRefinementBetter(candidateScore, currentScore) {
     if (!currentScore) return true;
     const tolerance = 1e-9;
+    
+    // Priority 1: totalItemCount (never accept dropped parts)
+    if ((candidateScore?.totalItemCount ?? 0) > (currentScore?.totalItemCount ?? 0)) return true;
+    if ((candidateScore?.totalItemCount ?? 0) < (currentScore?.totalItemCount ?? 0)) return false;
+    
+    // Priority 2: stripCount (fewer sheets better)
     if ((candidateScore?.stripCount ?? Infinity) !== (currentScore?.stripCount ?? Infinity)) {
       return (candidateScore?.stripCount ?? Infinity) < (currentScore?.stripCount ?? Infinity);
     }
+    
+    // Priority 3: mode-dependent tail quality
     if (candidateScore?.preferShortLastStrip || currentScore?.preferShortLastStrip) {
       if (((currentScore?.lastStripWidth ?? Infinity) - (candidateScore?.lastStripWidth ?? Infinity)) > tolerance) return true;
       if (((candidateScore?.lastStripWidth ?? Infinity) - (currentScore?.lastStripWidth ?? Infinity)) > tolerance) return false;
       if (((candidateScore?.lastDensity ?? 0) - (currentScore?.lastDensity ?? 0)) > tolerance) return true;
       if (((currentScore?.lastDensity ?? 0) - (candidateScore?.lastDensity ?? 0)) > tolerance) return false;
-      return (candidateScore?.totalItemCount ?? 0) > (currentScore?.totalItemCount ?? 0);
+      return false;
     }
     if (((candidateScore?.lastDensity ?? 0) - (currentScore?.lastDensity ?? 0)) > tolerance) return true;
     if (((currentScore?.lastDensity ?? 0) - (candidateScore?.lastDensity ?? 0)) > tolerance) return false;
     if (((currentScore?.lastStripWidth ?? Infinity) - (candidateScore?.lastStripWidth ?? Infinity)) > tolerance) return true;
     if (((candidateScore?.lastStripWidth ?? Infinity) - (currentScore?.lastStripWidth ?? Infinity)) > tolerance) return false;
-    return (candidateScore?.totalItemCount ?? 0) > (currentScore?.totalItemCount ?? 0);
+    return false;
   }
 
   globalScope.NestTailRefinement = {
